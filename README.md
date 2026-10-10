@@ -1,32 +1,39 @@
-# React + TypeScript + Vite
+# Relay
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Relay is a team kanban board for forward-deployed engineers (FDEs) and engineers, with a ranked feature-request backlog that connects customer needs to delivery.
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **Board:** To do, Doing, and Done columns; add, edit, delete, and drag cards with keyboard support; Doing WIP limit; filters.
+- **Cards:** Tasks, bugs, features, and customer escalations with priority, assignee, customer account, labels, due date, blocked reason, and comments with `@mentions`.
+- **Inbox:** Review recent activity and mentions.
+- **Feature requests:** Ranked by a weighted score: RICE (50%), team votes (30%), and ARR at stake (20%). Each factor is normalized against the top active request. Each member has a 10-point vote budget and can spend at most 5 points per request. Leads can edit the weights in Settings.
+- **Delivery loop:** Promote a request to a card; moving its linked card to Done automatically marks the request shipped.
+- **Data:** Export/import workspace JSON or reset the demo data.
 
-## React Compiler
+## Stack
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+React, TypeScript, and Vite; Zustand; Tailwind CSS v4; dnd-kit; Lucide icons; Vitest.
 
-## Expanding the Oxlint configuration
+## Scripts
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```sh
+npm install
+npm run dev
+npm run test
+npm run typecheck
+npm run lint
+npm run build
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+## Architecture
+
+- `src/domain/`: shared data types and pure scoring functions.
+- `src/store/`: seed data and the Zustand app store, persisted to browser localStorage under `relay:data` (version 1). This is the seam for a future backend.
+- `src/lib/`: UI helpers and the transient UI store.
+- `src/components/`: reusable UI components.
+- `src/views/`: board, requests, inbox, and settings views.
+
+## Roadmap to production
+
+Add real authentication and SSO; replace the local persisted store with a backend API and multi-user sync; enforce role permissions server-side; add Slack/email notifications; and provide a durable audit log.

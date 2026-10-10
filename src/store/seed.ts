@@ -288,7 +288,7 @@ const requests: FeatureRequest[] = [
     confidence: 80,
     effort: 3,
     arrAtStake: 310000,
-    votes: { elena: 3, jules: 2, sam: 2, leo: 1 },
+    votes: { elena: 2, jules: 2, sam: 2, leo: 1 },
     status: 'open',
     cardId: null,
     comments: comments([['jules', 'A replay preview would help @Sam validate payloads.', 3]]),
@@ -324,7 +324,7 @@ const requests: FeatureRequest[] = [
     confidence: 50,
     effort: 2,
     arrAtStake: 90000,
-    votes: { elena: 2, mara: 1, jules: 1, sam: 1 },
+    votes: { elena: 1, mara: 1, jules: 1, sam: 1 },
     status: 'open',
     cardId: null,
     comments: [],
@@ -389,7 +389,7 @@ const requests: FeatureRequest[] = [
 
 const activity: Activity[] = [
   ['card_moved', 'sam', 'card', 'card-105', 'Reduced cold-start time for agent runs', 'moved to Doing', 0],
-  ['request_voted', 'elena', 'request', 'request-202', 'Replay failed connector events', 'added 3 votes', 0],
+  ['request_voted', 'elena', 'request', 'request-202', 'Replay failed connector events', 'added 2 votes', 0],
   ['comment_added', 'jules', 'request', 'request-202', 'Replay failed connector events', 'commented on request', 1],
   ['card_updated', 'mara', 'card', 'card-106', 'Map Acme carrier aliases', 'updated due date', 1],
   ['request_created', 'priya', 'request', 'request-203', 'Per-run token and cost breakdown', 'created a feature request', 2],
