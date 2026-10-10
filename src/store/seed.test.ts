@@ -3,6 +3,13 @@ import { votesUsed } from '../domain/scoring'
 import { createSeedData } from './seed'
 
 describe('createSeedData', () => {
+  it('starts at the default Doing WIP limit', () => {
+    const data = createSeedData()
+
+    expect(data.settings.doingWipLimit).toBe(3)
+    expect(data.columnOrder.doing).toHaveLength(3)
+  })
+
   it('keeps member votes within the shared budget and per-request cap', () => {
     const data = createSeedData()
 

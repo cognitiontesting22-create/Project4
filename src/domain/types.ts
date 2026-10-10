@@ -100,7 +100,7 @@ export interface ScoringWeights {
 }
 
 export interface Settings {
-  wipLimitDoing: number // 0 = no limit
+  doingWipLimit: number // 0 = no limit
   voteBudget: number // points per member across active (open|planned) requests
   maxVotesPerRequest: number
   weights: ScoringWeights

@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 import { ACTIVE_STATUSES, parseMentions, votesUsed } from '../domain/scoring'
 import { uid } from '../domain/ids'
+import { normalizeLabels } from '../lib/filters'
+import { wipBlockReason } from '../domain/wip'
 import type {
   Activity,
   ActivityKind,
@@ -15,48 +17,74 @@ import type {
 } from '../domain/types'
 import { createSeedData } from './seed'
 
-type VoteResult = { ok: true } | { ok: false; reason: string }
+export type ActionResult = { ok: true } | { ok: false; reason: string }
+
+export type UndoableData = Pick<
+  AppData,
+  'cards' | 'columnOrder' | 'requests' | 'activity' | 'settings' | 'members'
+>
+
+export interface HistoryEntry {
+  label: string
+  data: UndoableData
+}
 
 interface AppActions {
   setCurrentUser: (id: string) => void
-  addCard: (input: Partial<Card> & { title: string; column: ColumnId }) => string
-  updateCard: (id: string, patch: Partial<Card>) => void
+  addCard: (input: Partial<Card> & { title: string; column: ColumnId }) => ActionResult
+  updateCard: (id: string, patch: Partial<Card>) => ActionResult
   deleteCard: (id: string) => void
-  moveCard: (id: string, to: ColumnId, toIndex: number) => void
+  moveCard: (id: string, to: ColumnId, toIndex: number) => ActionResult
   addComment: (target: 'card' | 'request', id: string, body: string) => void
   addRequest: (input: Partial<FeatureRequest> & { title: string }) => string
   updateRequest: (id: string, patch: Partial<FeatureRequest>) => void
   deleteRequest: (id: string) => void
-  setVote: (requestId: string, points: number) => VoteResult
+  setVote: (requestId: string, points: number) => ActionResult
   setRequestStatus: (id: string, status: RequestStatus) => void
   promoteRequest: (id: string) => string
   updateSettings: (patch: Partial<Settings>) => void
   markInboxSeen: () => void
   resetDemo: () => void
-  importData: (json: string) => VoteResult
+  importData: (json: string) => ActionResult
   exportData: () => string
+  undo: () => string | null
+  redo: () => string | null
 }
 
-export type AppStore = AppData & AppActions
+export type AppStore = AppData &
+  AppActions & {
+    past: HistoryEntry[]
+    future: HistoryEntry[]
+    settingsHistoryAt: number | null
+  }
 
 export const currentUser = (state: Pick<AppData, 'members' | 'currentUserId'>) =>
   state.members.find((member) => member.id === state.currentUserId)
+
+export const canUndo = (state: Pick<AppStore, 'past'>) => state.past.length > 0
+export const canRedo = (state: Pick<AppStore, 'future'>) => state.future.length > 0
 
 export const useAppStore = create<AppStore>()(
   persist(
     (set, get) => ({
       ...createSeedData(),
+      past: [],
+      future: [],
+      settingsHistoryAt: null,
 
       setCurrentUser: (id) => {
         set((state) =>
           state.members.some((member) => member.id === id)
-            ? { currentUserId: id }
+            ? { currentUserId: id, settingsHistoryAt: null }
             : {},
         )
       },
 
       addCard: (input) => {
         const state = get()
+        const reason = input.column === 'doing' ? wipBlockReason(state, null) : null
+        if (reason) return { ok: false, reason }
+
         const now = new Date().toISOString()
         const id = input.id ?? uid('card')
         const card: Card = {
@@ -70,7 +98,7 @@ export const useAppStore = create<AppStore>()(
           assigneeId: input.assigneeId ?? null,
           reporterId: input.reporterId ?? state.currentUserId,
           customer: input.customer ?? '',
-          labels: input.labels ?? [],
+          labels: normalizeLabels(input.labels ?? []),
           dueDate: input.dueDate ?? null,
           blocked: input.blocked ?? false,
           blockedReason: input.blockedReason ?? '',
@@ -81,6 +109,7 @@ export const useAppStore = create<AppStore>()(
         }
 
         set((current) => ({
+          ...recordHistory(current, `Add '${card.title}'`),
           cards: [...current.cards, card],
           columnOrder: {
             ...current.columnOrder,
@@ -94,25 +123,75 @@ export const useAppStore = create<AppStore>()(
             detail: `created ${card.type === 'task' ? 'a task' : `a ${card.type}`}`,
           })),
         }))
-        return card.id
+        return { ok: true }
       },
 
       updateCard: (id, patch) => {
-        const card = get().cards.find((item) => item.id === id)
-        if (!card) return
-        if (patch.column && patch.column !== card.column) {
-          const { column, ...rest } = patch
-          get().moveCard(id, column, get().columnOrder[column].length)
-          if (Object.keys(rest).length > 0) get().updateCard(id, rest)
-          return
+        const state = get()
+        const card = state.cards.find((item) => item.id === id)
+        if (!card) return { ok: true }
+        const normalizedPatch = {
+          ...patch,
+          ...(patch.labels ? { labels: normalizeLabels(patch.labels) } : {}),
         }
+        const destination = normalizedPatch.column ?? card.column
+        const reason =
+          destination === 'doing' && card.column !== 'doing'
+            ? wipBlockReason(state, id)
+            : null
+        if (reason) return { ok: false, reason }
+
+        const detailPatch = { ...normalizedPatch }
+        delete detailPatch.id
+        delete detailPatch.column
+        delete detailPatch.createdAt
+        delete detailPatch.updatedAt
+        const detailsChanged = hasDifferentValues(card, detailPatch)
+        const moved = destination !== card.column
+        if (!moved && !detailsChanged) return { ok: true }
 
         const now = new Date().toISOString()
-        set((state) => {
-          const updatedCard = { ...card, ...patch, id: card.id, updatedAt: now }
+        if (moved) {
+          const movement = cardMoveChanges(
+            state,
+            card,
+            destination,
+            state.columnOrder[destination].length,
+            now,
+          )
+          const updatedCard = {
+            ...movement.cards.find((item) => item.id === id)!,
+            ...normalizedPatch,
+            id: card.id,
+            column: destination,
+            updatedAt: now,
+          }
+          let activity = movement.activity
+          if (detailsChanged) {
+            activity = addActivity(activity, makeActivity(state, {
+              kind: 'card_updated',
+              targetType: 'card',
+              targetId: id,
+              targetTitle: updatedCard.title,
+              detail: 'updated card details',
+              createdAt: now,
+            }))
+          }
+          set((current) => ({
+            ...recordHistory(current, `Move '${updatedCard.title}' to ${columnTitle(destination)}`),
+            ...movement,
+            cards: movement.cards.map((item) => (item.id === id ? updatedCard : item)),
+            activity,
+          }))
+          return { ok: true }
+        }
+
+        set((current) => {
+          const updatedCard = { ...card, ...normalizedPatch, id: card.id, updatedAt: now }
           return {
-            cards: state.cards.map((item) => (item.id === id ? updatedCard : item)),
-            activity: addActivity(state.activity, makeActivity(state, {
+            ...recordHistory(current, `Edit '${updatedCard.title}'`),
+            cards: current.cards.map((item) => (item.id === id ? updatedCard : item)),
+            activity: addActivity(current.activity, makeActivity(current, {
               kind: 'card_updated',
               targetType: 'card',
               targetId: id,
@@ -121,6 +200,7 @@ export const useAppStore = create<AppStore>()(
             })),
           }
         })
+        return { ok: true }
       },
 
       deleteCard: (id) => {
@@ -156,6 +236,7 @@ export const useAppStore = create<AppStore>()(
           }
 
           return {
+            ...recordHistory(state, `Delete '${card.title}'`),
             cards: state.cards.filter((item) => item.id !== id),
             columnOrder: removeCardFromOrder(state.columnOrder, id),
             requests: linkedRequest
@@ -176,73 +257,23 @@ export const useAppStore = create<AppStore>()(
       },
 
       moveCard: (id, to, toIndex) => {
+        const state = get()
+        const card = state.cards.find((item) => item.id === id)
+        if (!card) return { ok: true }
+        const reason = to === 'doing' && card.column !== 'doing' ? wipBlockReason(state, id) : null
+        if (reason) return { ok: false, reason }
+
         const now = new Date().toISOString()
-        set((state) => {
-          const card = state.cards.find((item) => item.id === id)
-          if (!card) return {}
-          const columnOrder = removeCardFromOrder(state.columnOrder, id)
-          const destination = [...columnOrder[to]]
-          const index = Number.isFinite(toIndex)
-            ? Math.min(destination.length, Math.max(0, Math.trunc(toIndex)))
-            : destination.length
-          destination.splice(index, 0, id)
-          columnOrder[to] = destination
-          const updatedCard = { ...card, column: to, updatedAt: now }
-          const moved = card.column !== to
-          const activities: Activity[] = []
+        const movement = cardMoveChanges(state, card, to, toIndex, now)
+        if (card.column === to && sameOrder(movement.columnOrder, state.columnOrder)) {
+          return { ok: true }
+        }
 
-          if (moved) {
-            activities.push(
-              makeActivity(state, {
-                kind: 'card_moved',
-                targetType: 'card',
-                targetId: id,
-                targetTitle: card.title,
-                detail: `moved to ${columnTitle(to)}`,
-                createdAt: now,
-              }),
-            )
-          }
-
-          const linkedRequest = state.requests.find(
-            (request) => request.id === card.requestId || request.cardId === id,
-          )
-          const nextStatus =
-            linkedRequest && moved && to === 'done'
-              ? 'shipped'
-              : linkedRequest && moved && card.column === 'done' && to !== 'done'
-                ? 'planned'
-                : null
-          const requestStatusChanged =
-            linkedRequest && nextStatus && linkedRequest.status !== nextStatus
-
-          if (linkedRequest && nextStatus && requestStatusChanged) {
-            activities.push(
-              makeActivity(state, {
-                kind: 'request_status',
-                targetType: 'request',
-                targetId: linkedRequest.id,
-                targetTitle: linkedRequest.title,
-                detail: `marked as ${nextStatus}`,
-                createdAt: now,
-              }),
-            )
-          }
-
-          return {
-            cards: state.cards.map((item) => (item.id === id ? updatedCard : item)),
-            columnOrder,
-            requests:
-              linkedRequest && nextStatus
-                ? state.requests.map((request) =>
-                    request.id === linkedRequest.id
-                      ? { ...request, status: nextStatus, updatedAt: now }
-                      : request,
-                  )
-                : state.requests,
-            activity: addActivities(state.activity, activities),
-          }
-        })
+        set((current) => ({
+          ...recordHistory(current, `Move '${card.title}' to ${columnTitle(to)}`),
+          ...movement,
+        }))
+        return { ok: true }
       },
 
       addComment: (target, id, body) => {
@@ -273,6 +304,7 @@ export const useAppStore = create<AppStore>()(
           })
 
           return {
+            ...recordHistory(state, `Comment on '${item.title}'`),
             cards:
               target === 'card'
                 ? state.cards.map((card) =>
@@ -323,6 +355,7 @@ export const useAppStore = create<AppStore>()(
         }
 
         set((current) => ({
+          ...recordHistory(current, `Add request '${request.title}'`),
           requests: [...current.requests, request],
           activity: addActivity(current.activity, makeActivity(current, {
             kind: 'request_created',
@@ -336,17 +369,27 @@ export const useAppStore = create<AppStore>()(
       },
 
       updateRequest: (id, patch) => {
+        const state = get()
+        const request = state.requests.find((item) => item.id === id)
+        if (!request) return
+        const detailPatch = { ...patch }
+        delete detailPatch.id
+        delete detailPatch.createdAt
+        delete detailPatch.updatedAt
+        if (!hasDifferentValues(request, detailPatch)) return
+
         const now = new Date().toISOString()
         set((state) => {
-          const request = state.requests.find((item) => item.id === id)
-          if (!request) return {}
+          const currentRequest = state.requests.find((item) => item.id === id)
+          if (!currentRequest) return {}
           const updatedRequest = {
-            ...request,
+            ...currentRequest,
             ...patch,
-            id: request.id,
+            id: currentRequest.id,
             updatedAt: now,
           }
           return {
+            ...recordHistory(state, `Edit request '${updatedRequest.title}'`),
             requests: state.requests.map((item) => (item.id === id ? updatedRequest : item)),
             activity: addActivity(state.activity, makeActivity(state, {
               kind: 'request_status',
@@ -361,11 +404,12 @@ export const useAppStore = create<AppStore>()(
       },
 
       deleteRequest: (id) => {
-        const now = new Date().toISOString()
         set((state) => {
           const request = state.requests.find((item) => item.id === id)
           if (!request) return {}
+          const now = new Date().toISOString()
           return {
+            ...recordHistory(state, `Delete request '${request.title}'`),
             requests: state.requests.filter((item) => item.id !== id),
             cards: state.cards.map((card) =>
               card.requestId === id
@@ -403,6 +447,13 @@ export const useAppStore = create<AppStore>()(
         const otherVotes =
           votesUsed(state.requests, state.currentUserId) -
           (request.votes[state.currentUserId] ?? 0)
+        const hasVote = Object.prototype.hasOwnProperty.call(
+          request.votes,
+          state.currentUserId,
+        )
+        if ((!hasVote && points === 0) || (hasVote && request.votes[state.currentUserId] === points)) {
+          return { ok: true }
+        }
         if (otherVotes + points > state.settings.voteBudget) {
           return {
             ok: false,
@@ -412,6 +463,7 @@ export const useAppStore = create<AppStore>()(
 
         const now = new Date().toISOString()
         set((current) => ({
+          ...recordHistory(current, `Vote on '${request.title}'`),
           requests: current.requests.map((item) => {
             if (item.id !== requestId) return item
             const votes = { ...item.votes }
@@ -432,11 +484,12 @@ export const useAppStore = create<AppStore>()(
       },
 
       setRequestStatus: (id, status) => {
-        const now = new Date().toISOString()
         set((state) => {
           const request = state.requests.find((item) => item.id === id)
-          if (!request) return {}
+          if (!request || request.status === status) return {}
+          const now = new Date().toISOString()
           return {
+            ...recordHistory(state, `Change status of '${request.title}'`),
             requests: state.requests.map((item) =>
               item.id === id ? { ...item, status, updatedAt: now } : item,
             ),
@@ -481,6 +534,7 @@ export const useAppStore = create<AppStore>()(
         }
 
         set((current) => ({
+          ...recordHistory(current, `Promote '${request.title}'`),
           cards: [...current.cards, card],
           columnOrder: {
             ...current.columnOrder,
@@ -504,23 +558,44 @@ export const useAppStore = create<AppStore>()(
       },
 
       updateSettings: (patch) => {
-        set((state) => ({
-          settings: {
+        const now = Date.now()
+        set((state) => {
+          const settings = {
             ...state.settings,
             ...patch,
             weights: { ...state.settings.weights, ...patch.weights },
-          },
-        }))
+          }
+          if (JSON.stringify(settings) === JSON.stringify(state.settings)) return {}
+
+          const coalesce =
+            state.settingsHistoryAt !== null &&
+            now - state.settingsHistoryAt <= 1000 &&
+            state.past[state.past.length - 1]?.label === 'Change settings'
+          return {
+            settings,
+            past: coalesce
+              ? state.past
+              : [...state.past, { label: 'Change settings', data: snapshot(state) }].slice(-100),
+            future: [],
+            settingsHistoryAt: now,
+          }
+        })
       },
 
       markInboxSeen: () => {
         const now = new Date().toISOString()
         set((state) => ({
           lastSeen: { ...state.lastSeen, [state.currentUserId]: now },
+          settingsHistoryAt: null,
         }))
       },
 
-      resetDemo: () => set(createSeedData()),
+      resetDemo: () => {
+        set((state) => ({
+          ...createSeedData(),
+          ...recordHistory(state, 'Reset demo data'),
+        }))
+      },
 
       importData: (json) => {
         let parsed: unknown
@@ -532,17 +607,69 @@ export const useAppStore = create<AppStore>()(
         if (!isAppData(parsed)) {
           return { ok: false, reason: 'Import must be Relay data version 1.' }
         }
-        set(parsed)
+        set((state) => ({
+          ...parsed,
+          ...recordHistory(state, 'Import data'),
+        }))
         return { ok: true }
       },
 
       exportData: () => JSON.stringify(toAppData(get()), null, 2),
+
+      undo: () => {
+        const state = get()
+        const entry = state.past[state.past.length - 1]
+        if (!entry) return null
+        set({
+          ...entry.data,
+          past: state.past.slice(0, -1),
+          future: [...state.future, { label: entry.label, data: snapshot(state) }].slice(-100),
+          settingsHistoryAt: null,
+        })
+        return entry.label
+      },
+
+      redo: () => {
+        const state = get()
+        const entry = state.future[state.future.length - 1]
+        if (!entry) return null
+        set({
+          ...entry.data,
+          past: [...state.past, { label: entry.label, data: snapshot(state) }].slice(-100),
+          future: state.future.slice(0, -1),
+          settingsHistoryAt: null,
+        })
+        return entry.label
+      },
     }),
     {
       name: 'relay:data',
       version: 1,
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => toAppData(state),
+      merge: (persistedState, currentState) => {
+        if (!persistedState || typeof persistedState !== 'object') return currentState
+        const persisted = persistedState as Partial<AppData>
+        const oldSettings = persisted.settings as (Settings & { wipLimitDoing?: number }) | undefined
+        const { wipLimitDoing, ...savedSettings } = oldSettings ?? {}
+        return {
+          ...currentState,
+          ...persisted,
+          settings: oldSettings
+            ? {
+                ...currentState.settings,
+                ...savedSettings,
+                doingWipLimit:
+                  oldSettings.doingWipLimit ??
+                  wipLimitDoing ??
+                  currentState.settings.doingWipLimit,
+              }
+            : currentState.settings,
+          past: currentState.past,
+          future: currentState.future,
+          settingsHistoryAt: null,
+        }
+      },
     },
   ),
 )
@@ -559,6 +686,122 @@ function toAppData(state: AppData): AppData {
     lastSeen: state.lastSeen,
     settings: state.settings,
   }
+}
+
+function snapshot(state: Pick<AppData, keyof UndoableData>): UndoableData {
+  return {
+    cards: state.cards,
+    columnOrder: state.columnOrder,
+    requests: state.requests,
+    activity: state.activity,
+    settings: state.settings,
+    members: state.members,
+  }
+}
+
+function recordHistory(
+  state: AppStore,
+  label: string,
+): Pick<AppStore, 'past' | 'future' | 'settingsHistoryAt'> {
+  return {
+    past: [...state.past, { label, data: snapshot(state) }].slice(-100),
+    future: [],
+    settingsHistoryAt: null,
+  }
+}
+
+function cardMoveChanges(
+  state: AppData,
+  card: Card,
+  to: ColumnId,
+  toIndex: number,
+  now: string,
+): Pick<AppData, 'cards' | 'columnOrder' | 'requests' | 'activity'> {
+  const columnOrder = removeCardFromOrder(state.columnOrder, card.id)
+  const destination = [...columnOrder[to]]
+  const index = Number.isFinite(toIndex)
+    ? Math.min(destination.length, Math.max(0, Math.trunc(toIndex)))
+    : destination.length
+  destination.splice(index, 0, card.id)
+  columnOrder[to] = destination
+
+  const moved = card.column !== to
+  const updatedCard = { ...card, column: to, updatedAt: now }
+  const activities: Activity[] = []
+  if (moved) {
+    activities.push(
+      makeActivity(state, {
+        kind: 'card_moved',
+        targetType: 'card',
+        targetId: card.id,
+        targetTitle: card.title,
+        detail: `moved to ${columnTitle(to)}`,
+        createdAt: now,
+      }),
+    )
+  }
+
+  const linkedRequest = state.requests.find(
+    (request) => request.id === card.requestId || request.cardId === card.id,
+  )
+  const nextStatus: RequestStatus | null =
+    linkedRequest && moved && to === 'done'
+      ? 'shipped'
+      : linkedRequest && moved && card.column === 'done' && to !== 'done'
+        ? 'planned'
+        : null
+  const requestStatusChanged =
+    linkedRequest && nextStatus && linkedRequest.status !== nextStatus
+
+  if (linkedRequest && nextStatus && requestStatusChanged) {
+    activities.push(
+      makeActivity(state, {
+        kind: 'request_status',
+        targetType: 'request',
+        targetId: linkedRequest.id,
+        targetTitle: linkedRequest.title,
+        detail: `marked as ${nextStatus}`,
+        createdAt: now,
+      }),
+    )
+  }
+
+  return {
+    cards: state.cards.map((item) => (item.id === card.id ? updatedCard : item)),
+    columnOrder,
+    requests:
+      linkedRequest && nextStatus
+        ? state.requests.map((request) =>
+            request.id === linkedRequest.id
+              ? { ...request, status: nextStatus, updatedAt: now }
+              : request,
+          )
+        : state.requests,
+    activity: addActivities(state.activity, activities),
+  }
+}
+
+function sameOrder(
+  left: AppData['columnOrder'],
+  right: AppData['columnOrder'],
+): boolean {
+  return (['todo', 'doing', 'done'] as const).every(
+    (column) =>
+      left[column].length === right[column].length &&
+      left[column].every((id, index) => id === right[column][index]),
+  )
+}
+
+function hasDifferentValues<T extends object>(
+  current: T,
+  patch: Partial<T>,
+): boolean {
+  const values = current as Record<string, unknown>
+  return Object.entries(patch).some(([key, value]) => {
+    const previous = values[key]
+    if (Object.is(previous, value)) return false
+    return JSON.stringify(previous) !== JSON.stringify(value)
+  })
 }
 
 function makeActivity(
