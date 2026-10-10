@@ -10,10 +10,12 @@ interface Props {
   card: Card
   assignee?: Member
   onOpen?: () => void
+  onLabelFilter?: (label: string) => void
+  onCardKeyDown?: (event: React.KeyboardEvent<HTMLDivElement>) => void
   overlay?: boolean
 }
 
-export function CardView({ card, assignee, onOpen, overlay }: Props) {
+export function CardView({ card, assignee, onOpen, onLabelFilter, overlay }: Props) {
   const type = TYPE_META[card.type]
   const TypeIcon = type.icon
   const due = card.column === 'done' ? null : dueState(card.dueDate)
@@ -56,9 +58,25 @@ export function CardView({ card, assignee, onOpen, overlay }: Props) {
             </span>
           )}
           {card.labels.map((l) => (
-            <span key={l} className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600">
-              {l}
-            </span>
+            onLabelFilter ? (
+              <button
+                key={l}
+                type="button"
+                title="Filter by label"
+                className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600 hover:bg-indigo-100 hover:text-indigo-700"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onLabelFilter(l)
+                }}
+              >
+                {l}
+              </button>
+            ) : (
+              <span key={l} className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600">
+                {l}
+              </span>
+            )
           ))}
         </div>
       )}
@@ -99,13 +117,19 @@ export function SortableCard(props: Props) {
     <div
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
-      className={clsx('outline-none focus-visible:rounded-xl focus-visible:ring-2 focus-visible:ring-indigo-500', isDragging && 'opacity-40')}
+      data-card-id={props.card.id}
+      className={clsx('outline-none focus-visible:rounded-xl focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2', isDragging && 'opacity-40')}
       aria-label={props.card.title}
       {...attributes}
       {...listeners}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') props.onOpen?.()
-        listeners?.onKeyDown?.(e)
+      onKeyDown={(event) => {
+        props.onCardKeyDown?.(event)
+        if (event.defaultPrevented) return
+        if (event.key === 'Enter') {
+          event.preventDefault()
+          props.onOpen?.()
+        }
+        listeners?.onKeyDown?.(event)
       }}
     >
       <CardView {...props} />

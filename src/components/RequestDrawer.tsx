@@ -49,10 +49,22 @@ export function RequestDrawer() {
   const [draft, setDraft] = useState<Draft>(toDraft())
   const [confirmDelete, setConfirmDelete] = useState(false)
 
+  const draftKey =
+    target === null
+      ? null
+      : target === 'new'
+        ? 'new'
+        : `${target}:${request?.updatedAt ?? 'missing'}`
+
   useEffect(() => {
+    if (target && target !== 'new' && !request) {
+      close()
+      return
+    }
     setConfirmDelete(false)
     setDraft(toDraft(target && target !== 'new' ? useAppStore.getState().requests.find((r) => r.id === target) : undefined))
-  }, [target])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey])
 
   const patch: Partial<FeatureRequest> = {
     title: draft.title.trim(),

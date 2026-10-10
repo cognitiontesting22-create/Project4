@@ -81,8 +81,8 @@ export function SettingsView() {
           </div>
         </Section>
 
-        <Section title="Flow" description="A WIP limit on Doing keeps the team finishing work before starting more. Set 0 to disable." locked={!isLead}>
-          <NumberField label="WIP limit for Doing" value={settings.wipLimitDoing} min={0} max={50} disabled={!isLead} onChange={(v) => updateSettings({ wipLimitDoing: v })} />
+        <Section title="Flow" description="Doing blocks new cards once it reaches this many. Set 0 to turn off." locked={!isLead}>
+          <NumberField label="WIP limit for Doing" value={settings.doingWipLimit} min={0} max={50} disabled={!isLead} onChange={(v) => updateSettings({ doingWipLimit: v })} />
         </Section>
 
         <Section title="Team" description="Roles show up as badges across the board, requests and discussion.">
