@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { parseBoardFile } from '../domain/boardFile'
 import { createSeedData } from './seed'
 
 class MemoryStorage implements Storage {
@@ -102,6 +103,180 @@ describe('useAppStore', () => {
       ok: true,
     })
     expect(useAppStore.getState().columnOrder.doing).toHaveLength(4)
+  })
+
+  it('moves a checklist-complete card from To do and Doing to Done', () => {
+    const todo = useAppStore.getState().addCard({
+      title: 'One-step task',
+      column: 'todo',
+      checklist: [{ id: 'todo-check', text: 'Finish the task', done: false }],
+    })
+    expect(todo).toEqual({ ok: true })
+    const todoCard = useAppStore.getState().cards.find((card) => card.title === 'One-step task')!
+    expect(useAppStore.getState().updateChecklistItem(todoCard.id, 'todo-check', { done: true }))
+      .toMatchObject({ ok: true, autoMoved: 'done' })
+    expect(useAppStore.getState().cards.find((card) => card.id === todoCard.id)?.column).toBe('done')
+
+    for (const item of useAppStore.getState().cards.find((card) => card.id === 'card-105')!.checklist) {
+      if (!item.done) {
+        useAppStore.getState().updateChecklistItem('card-105', item.id, { done: true })
+      }
+    }
+    expect(useAppStore.getState().cards.find((card) => card.id === 'card-105')?.column).toBe('done')
+    expect(useAppStore.getState().columnOrder.done[0]).toBe('card-105')
+  })
+
+  it('moves blocked cards to Done when their checklist is completed', () => {
+    useAppStore.getState().addCard({
+      title: 'Blocked but complete',
+      column: 'todo',
+      blocked: true,
+      checklist: [{ id: 'blocked-check', text: 'Resolve blocker', done: false }],
+    })
+    const card = useAppStore.getState().cards.find((item) => item.title === 'Blocked but complete')!
+
+    expect(useAppStore.getState().updateChecklistItem(card.id, 'blocked-check', { done: true }))
+      .toMatchObject({ ok: true, autoMoved: 'done' })
+  })
+
+  it('records a checklist tick and its auto-move as one undoable change', () => {
+    const item = useAppStore.getState().cards.find((card) => card.id === 'card-105')!.checklist[2]
+    const historyLength = useAppStore.getState().past.length
+    useAppStore.getState().updateChecklistItem('card-105', item.id, { done: true })
+    useAppStore.getState().updateChecklistItem('card-105', 'check-105-4', { done: true })
+    useAppStore.getState().updateChecklistItem('card-105', 'check-105-5', { done: true })
+
+    expect(useAppStore.getState().past).toHaveLength(historyLength + 3)
+    expect(useAppStore.getState().columnOrder.done[0]).toBe('card-105')
+    expect(useAppStore.getState().undo()).toBe("Complete checklist on 'Reduce cold-start time for agent runs'")
+    expect(useAppStore.getState().cards.find((card) => card.id === 'card-105')?.column).toBe('doing')
+    expect(useAppStore.getState().cards.find((card) => card.id === 'card-105')?.checklist[4].done)
+      .toBe(false)
+  })
+
+  it('reopens a completed Done checklist into Doing when there is capacity', () => {
+    useAppStore.getState().moveCard('card-105', 'todo', 0)
+    expect(useAppStore.getState().updateChecklistItem('card-109', 'check-109-1', { done: false }))
+      .toMatchObject({ ok: true, autoMoved: 'doing' })
+    expect(useAppStore.getState().columnOrder.doing[0]).toBe('card-109')
+  })
+
+  it('reopens a completed Done checklist into To do when Doing is full', () => {
+    expect(useAppStore.getState().updateChecklistItem('card-109', 'check-109-1', { done: false }))
+      .toMatchObject({
+        ok: true,
+        autoMoved: 'todo',
+        reason: 'Doing is at its WIP limit (3/3). Finish or move a card out of Doing first.',
+      })
+    expect(useAppStore.getState().columnOrder.todo[0]).toBe('card-109')
+  })
+
+  it('does not auto-move when the last incomplete checklist item is deleted', () => {
+    useAppStore.getState().addCard({
+      title: 'Incomplete checklist',
+      column: 'todo',
+      checklist: [{ id: 'incomplete', text: 'Still not done', done: false }],
+    })
+    const card = useAppStore.getState().cards.find((item) => item.title === 'Incomplete checklist')!
+
+    useAppStore.getState().deleteChecklistItem(card.id, 'incomplete')
+    expect(useAppStore.getState().cards.find((item) => item.id === card.id)?.column).toBe('todo')
+    expect(useAppStore.getState().cards.find((item) => item.id === card.id)?.checklist).toEqual([])
+  })
+
+  it('ships a linked request when checklist completion auto-moves its card', () => {
+    useAppStore.getState().updateCard('card-104', {
+      checklist: [{ id: 'linked-check', text: 'Ship the feature', done: false }],
+    })
+
+    useAppStore.getState().updateChecklistItem('card-104', 'linked-check', { done: true })
+    expect(useAppStore.getState().requests.find((item) => item.id === 'request-201')?.status)
+      .toBe('shipped')
+  })
+
+  it('rejects empty checklist text and reorders checklist items', () => {
+    const store = useAppStore.getState()
+    expect(store.addChecklistItem('card-105', '   ')).toEqual({
+      ok: false,
+      reason: 'Checklist item text cannot be empty.',
+    })
+    expect(store.past).toHaveLength(0)
+    expect(store.moveChecklistItem('card-105', 'check-105-1', 4)).toEqual({ ok: true })
+    expect(useAppStore.getState().cards.find((card) => card.id === 'card-105')?.checklist[4].id)
+      .toBe('check-105-1')
+  })
+
+  it('migrates v1 workspace imports and persisted cards to checklist version 2', async () => {
+    const current = createSeedData()
+    const legacy = {
+      ...current,
+      version: 1,
+      cards: current.cards.map(({ checklist: _checklist, ...card }) => card),
+    }
+    expect(useAppStore.getState().importData(JSON.stringify(legacy))).toEqual({ ok: true })
+    expect(useAppStore.getState().version).toBe(2)
+    expect(useAppStore.getState().cards.every((card) => Array.isArray(card.checklist))).toBe(true)
+
+    localStorage.setItem('relay:data', JSON.stringify({ state: legacy, version: 1 }))
+    await useAppStore.persist.rehydrate()
+    expect(useAppStore.getState().version).toBe(2)
+    expect(useAppStore.getState().cards.every((card) => Array.isArray(card.checklist))).toBe(true)
+  })
+
+  it('imports only board data, repairs request links, and restores everything in one undo', () => {
+    const before = useAppStore.getState()
+    const cards = before.cards
+      .filter((card) => card.id !== 'card-104')
+      .map((card) => ({
+        ...card,
+        requestId: card.id === 'card-101' || card.id === 'card-102' ? 'request-202' : card.requestId,
+      }))
+    const columnOrder = {
+      todo: before.columnOrder.todo.filter((id) => id !== 'card-104'),
+      doing: [...before.columnOrder.doing],
+      done: [...before.columnOrder.done],
+    }
+    const members = before.members
+    const settings = before.settings
+    const lastSeen = before.lastSeen
+    const requests = before.requests
+    const previousActivity = before.activity
+
+    before.importBoard({ cards, columnOrder })
+    const imported = useAppStore.getState()
+
+    expect(imported.cards).toEqual(cards.map((card) =>
+      card.id === 'card-102' ? { ...card, requestId: null } : card,
+    ))
+    expect(imported.columnOrder).toEqual(columnOrder)
+    expect(imported.members).toBe(members)
+    expect(imported.settings).toBe(settings)
+    expect(imported.lastSeen).toBe(lastSeen)
+    expect(imported.requests.find((request) => request.id === 'request-201')).toMatchObject({
+      status: 'open',
+      cardId: null,
+    })
+    expect(imported.requests.find((request) => request.id === 'request-202')?.cardId).toBe('card-101')
+    expect(imported.cards.find((card) => card.id === 'card-102')?.requestId).toBeNull()
+    expect(imported.activity).toHaveLength(previousActivity.length + 1)
+    expect(imported.activity[0].detail).toBe('imported board')
+
+    expect(imported.undo()).toBe('Import board')
+    const undone = useAppStore.getState()
+    expect(undone.cards).toBe(before.cards)
+    expect(undone.columnOrder).toBe(before.columnOrder)
+    expect(undone.requests).toBe(requests)
+    expect(undone.activity).toBe(previousActivity)
+  })
+
+  it('does not mutate store references when board parsing is refused', () => {
+    const before = useAppStore.getState()
+    expect(parseBoardFile('{invalid', {
+      memberIds: before.members.map((member) => member.id),
+      requestIds: before.requests.map((request) => request.id),
+      currentUserId: before.currentUserId,
+    })).toEqual({ ok: false, reason: "This file isn't valid JSON." })
+    expect(useAppStore.getState()).toBe(before)
   })
 
   it('normalizes labels when adding and updating cards', () => {

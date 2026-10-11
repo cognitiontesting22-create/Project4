@@ -29,10 +29,10 @@ export function CommentThread({ comments, onAdd }: { comments: Comment[]; onAdd:
           const author = byId.get(c.authorId)
           return (
             <li key={c.id} className="flex gap-3">
-              <Avatar member={author} />
+              <Avatar member={author} formerMember={!author} />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 text-xs">
-                  <span className="font-semibold text-slate-800">{author?.name ?? 'Unknown'}</span>
+                  <span className="font-semibold text-slate-800">{author?.name ?? 'Former member'}</span>
                   {author && <RoleBadge member={author} />}
                   <span className="text-slate-400">{relativeTime(c.createdAt)}</span>
                 </div>

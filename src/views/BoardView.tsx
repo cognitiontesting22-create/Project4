@@ -12,9 +12,10 @@ import {
 } from '@dnd-kit/core'
 import { arrayMove, SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import clsx from 'clsx'
-import { Ban, Plus, Search, Tag, TriangleAlert, X } from 'lucide-react'
-import { useMemo, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { Ban, ChevronDown, Download, Plus, Search, Tag, TriangleAlert, Upload, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { COLUMNS, type Card, type ColumnId, type Member } from '../domain/types'
+import { parseBoardFile, serializeBoard, type ParsedBoard } from '../domain/boardFile'
 import { wipBlockReason } from '../domain/wip'
 import { Avatar } from '../components/Avatar'
 import { CardView, SortableCard } from '../components/CardItem'
@@ -53,12 +54,22 @@ function focusCard(cardId: string) {
   })
 }
 
+type BoardImportDialogState =
+  | { type: 'error'; filename: string; reason: string }
+  | {
+      type: 'confirm'
+      filename: string
+      board: Extract<ParsedBoard, { ok: true }>
+      currentCount: number
+    }
+
 export function BoardView() {
   const cards = useAppStore((state) => state.cards)
   const columnOrder = useAppStore((state) => state.columnOrder)
   const members = useAppStore((state) => state.members)
   const settings = useAppStore((state) => state.settings)
   const moveCard = useAppStore((state) => state.moveCard)
+  const importBoard = useAppStore((state) => state.importBoard)
   const filters = useUiStore((state) => state.boardFilters)
   const setFilters = useUiStore((state) => state.setBoardFilters)
   const clearFilters = useUiStore((state) => state.clearBoardFilters)
@@ -71,6 +82,10 @@ export function BoardView() {
   const [activeId, setActiveId] = useState<string | null>(null)
   const [blockedDoingHover, setBlockedDoingHover] = useState(false)
   const [announcement, setAnnouncement] = useState('')
+  const searchRef = useRef<HTMLInputElement>(null)
+  const importFileRef = useRef<HTMLInputElement>(null)
+  const [fileMenuOpen, setFileMenuOpen] = useState(false)
+  const [importDialog, setImportDialog] = useState<BoardImportDialogState | null>(null)
 
   const byId = useMemo(() => new Map(cards.map((card) => [card.id, card])), [cards])
   const memberById = useMemo(
@@ -105,6 +120,24 @@ export function BoardView() {
   const totalVisible = COLUMNS.reduce((count, column) => count + visibleOrder[column.id].length, 0)
   const blockedCount = cards.filter((card) => card.blocked && card.column !== 'done').length
   const escalations = cards.filter((card) => card.type === 'escalation' && card.column !== 'done').length
+
+  useEffect(() => {
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      const target = event.target
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+      ) {
+        return
+      }
+      if (event.key === '/') {
+        event.preventDefault()
+        searchRef.current?.focus()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   const containerOf = (id: string, currentOrder: Order): ColumnId | undefined =>
     isColumn(id)
@@ -274,6 +307,68 @@ export function BoardView() {
     if (targetId) focusCard(targetId)
   }
 
+  const exportBoardFile = () => {
+    const blob = new Blob([serializeBoard({ cards, columnOrder })], {
+      type: 'application/json',
+    })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `relay-board-${new Date().toISOString().slice(0, 10)}.json`
+    link.click()
+    URL.revokeObjectURL(url)
+    setFileMenuOpen(false)
+  }
+
+  const handleBoardFile = async (file: File) => {
+    setFileMenuOpen(false)
+    try {
+      const text = await file.text()
+      const result = parseBoardFile(text, {
+        memberIds: members.map((member) => member.id),
+        requestIds: useAppStore.getState().requests.map((request) => request.id),
+        currentUserId: useAppStore.getState().currentUserId,
+      })
+      if (!result.ok) {
+        setImportDialog({ type: 'error', filename: file.name, reason: result.reason })
+        return
+      }
+      setImportDialog({
+        type: 'confirm',
+        filename: file.name,
+        board: result,
+        currentCount: cards.length,
+      })
+    } catch {
+      setImportDialog({
+        type: 'error',
+        filename: file.name,
+        reason: 'This file could not be read.',
+      })
+    }
+  }
+
+  const confirmBoardImport = () => {
+    if (importDialog?.type !== 'confirm') return
+    const count = importDialog.board.cards.length
+    importBoard({
+      cards: importDialog.board.cards,
+      columnOrder: importDialog.board.columnOrder,
+    })
+    setImportDialog(null)
+    showToast({
+      message: `Imported ${count} cards`,
+      variant: 'info',
+      action: {
+        label: 'Undo',
+        onClick: () => {
+          const label = useAppStore.getState().undo()
+          if (label) showToast({ message: `Undid: ${label}`, variant: 'info' })
+        },
+      },
+    })
+  }
+
   const activeCard = activeId ? byId.get(activeId) : undefined
 
   return (
@@ -287,10 +382,57 @@ export function BoardView() {
               <span className="text-rose-600">{blockedCount} blocked</span>
             </p>
           </div>
-          <button className={btnPrimary} onClick={() => newCard('todo')}>
-            <Plus className="h-4 w-4" />
-            New card
-          </button>
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <button
+                type="button"
+                aria-expanded={fileMenuOpen}
+                onClick={() => setFileMenuOpen((open) => !open)}
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+              >
+                Export / Import
+                <ChevronDown className="h-4 w-4" />
+              </button>
+              {fileMenuOpen && (
+                <div className="absolute right-0 top-full z-30 mt-2 w-56 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl">
+                  <button
+                    type="button"
+                    onClick={exportBoardFile}
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+                  >
+                    <Download className="h-4 w-4 text-slate-400" />
+                    Export board (.json)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFileMenuOpen(false)
+                      importFileRef.current?.click()
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+                  >
+                    <Upload className="h-4 w-4 text-slate-400" />
+                    Import board…
+                  </button>
+                </div>
+              )}
+              <input
+                ref={importFileRef}
+                type="file"
+                accept=".json,application/json"
+                hidden
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0]
+                  event.currentTarget.value = ''
+                  if (file) void handleBoardFile(file)
+                }}
+              />
+            </div>
+            <button className={btnPrimary} onClick={() => newCard('todo')}>
+              <Plus className="h-4 w-4" />
+              New card
+            </button>
+          </div>
         </div>
         <Toolbar
           filters={filters}
@@ -298,6 +440,7 @@ export function BoardView() {
           members={members}
           customers={customers}
           cards={cards}
+          searchRef={searchRef}
         />
         {filtered && (
           <p className="mt-3 flex items-center gap-2 text-xs text-slate-500">
@@ -344,6 +487,7 @@ export function BoardView() {
                       <SortableCard
                         key={id}
                         card={card}
+                        query={filters.query}
                         assignee={memberById.get(card.assigneeId ?? '')}
                         onOpen={() => openCard(id)}
                         onLabelFilter={toggleLabelFilter}
@@ -366,13 +510,25 @@ export function BoardView() {
         </p>
         <DragOverlay>
           {activeCard && (
-            <CardView card={activeCard} assignee={memberById.get(activeCard.assigneeId ?? '')} overlay />
+            <CardView
+              card={activeCard}
+              query={filters.query}
+              assignee={memberById.get(activeCard.assigneeId ?? '')}
+              overlay
+            />
           )}
         </DragOverlay>
       </DndContext>
       <div role="status" aria-live="polite" className="sr-only">
         {announcement}
       </div>
+      {importDialog && (
+        <BoardImportDialog
+          dialog={importDialog}
+          onCancel={() => setImportDialog(null)}
+          onConfirm={confirmBoardImport}
+        />
+      )}
     </div>
   )
 }
@@ -450,12 +606,14 @@ function Toolbar({
   members,
   customers,
   cards,
+  searchRef,
 }: {
   filters: BoardFilters
   setFilters: (filters: BoardFilters) => void
   members: Member[]
   customers: string[]
   cards: Card[]
+  searchRef: React.RefObject<HTMLInputElement | null>
 }) {
   const [labelsOpen, setLabelsOpen] = useState(false)
   const [labelSearch, setLabelSearch] = useState('')
@@ -479,9 +637,17 @@ function Toolbar({
       <div className="relative">
         <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
         <input
+          ref={searchRef}
           value={filters.query}
           onChange={(event) => update({ query: event.target.value })}
-          placeholder="Search cards…"
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              update({ query: '' })
+              event.currentTarget.blur()
+            }
+          }}
+          placeholder="Search title or description… /"
           aria-label="Search cards"
           className="w-60 rounded-lg border border-slate-200 bg-white py-1.5 pl-8 pr-7 text-sm shadow-sm placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
         />
@@ -664,6 +830,7 @@ export function KeyboardShortcutsDialog({ onClose }: { onClose: () => void }) {
     ['Undo', `${modifier} + Z`],
     ['Redo', `${modifier} + Shift + Z`],
     ['Redo (alternate)', 'Ctrl + Y'],
+    ['Focus search', '/'],
     ['Show these shortcuts', '?'],
   ]
 
@@ -702,6 +869,101 @@ export function KeyboardShortcutsDialog({ onClose }: { onClose: () => void }) {
             </div>
           ))}
         </dl>
+      </section>
+    </div>
+  )
+}
+
+function BoardImportDialog({
+  dialog,
+  onCancel,
+  onConfirm,
+}: {
+  dialog: BoardImportDialogState
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  const primaryRef = useRef<HTMLButtonElement>(null)
+  const cancelRef = useRef(onCancel)
+  useEffect(() => {
+    cancelRef.current = onCancel
+  }, [onCancel])
+
+  useEffect(() => {
+    primaryRef.current?.focus()
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        cancelRef.current()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
+  const confirmation = dialog.type === 'confirm' ? dialog : null
+  const warningCount = confirmation?.board.unassignedCount ?? 0
+  const warning =
+      warningCount === 1
+      ? "1 card will be unassigned because its assignee isn't on this team."
+      : `${warningCount} cards will be unassigned because their assignee isn't on this team.`
+
+  return (
+    <div
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/40 p-4"
+      onClick={onCancel}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="board-import-title"
+        aria-describedby="board-import-description"
+        className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        {dialog.type === 'error' ? (
+          <>
+            <h2 id="board-import-title" className="text-lg font-semibold text-slate-900">
+              Couldn't import {dialog.filename}
+            </h2>
+            <p id="board-import-description" className="mt-3 text-sm text-slate-600">
+              {dialog.reason}
+            </p>
+            <p className="mt-2 text-sm text-slate-500">Your board was not changed.</p>
+            <div className="mt-6 flex justify-end">
+              <button ref={primaryRef} className={btnPrimary} onClick={onCancel}>
+                OK
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <h2 id="board-import-title" className="text-lg font-semibold text-slate-900">
+              Replace board?
+            </h2>
+            <p id="board-import-description" className="mt-3 text-sm leading-relaxed text-slate-600">
+              Replace {dialog.currentCount} cards with {dialog.board.cards.length} cards from{' '}
+              {dialog.filename}? Feature requests, team and settings stay as they are.
+            </p>
+            {warningCount > 0 && (
+              <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                {warning}
+              </p>
+            )}
+            <div className="mt-6 flex justify-end gap-2">
+              <button className="rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100" onClick={onCancel}>
+                Cancel
+              </button>
+              <button
+                ref={primaryRef}
+                className="rounded-lg bg-rose-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-rose-700 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-2"
+                onClick={onConfirm}
+              >
+                Replace board
+              </button>
+            </div>
+          </>
+        )}
       </section>
     </div>
   )

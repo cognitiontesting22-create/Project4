@@ -27,6 +27,12 @@ export interface Comment {
   createdAt: string // ISO
 }
 
+export interface ChecklistItem {
+  id: string
+  text: string
+  done: boolean
+}
+
 export interface Card {
   id: string
   title: string
@@ -42,6 +48,7 @@ export interface Card {
   blocked: boolean
   blockedReason: string
   comments: Comment[]
+  checklist: ChecklistItem[]
   requestId: string | null // feature request this card was promoted from
   createdAt: string
   updatedAt: string
@@ -107,7 +114,7 @@ export interface Settings {
 }
 
 export interface AppData {
-  version: 1
+  version: 2
   members: Member[]
   currentUserId: string
   cards: Card[]

@@ -9,6 +9,7 @@ import type {
   ActivityKind,
   AppData,
   Card,
+  ChecklistItem,
   ColumnId,
   Comment,
   FeatureRequest,
@@ -18,6 +19,9 @@ import type {
 import { createSeedData } from './seed'
 
 export type ActionResult = { ok: true } | { ok: false; reason: string }
+export type ChecklistActionResult =
+  | { ok: true; autoMoved?: ColumnId; reason?: string }
+  | { ok: false; reason: string }
 
 export type UndoableData = Pick<
   AppData,
@@ -32,6 +36,14 @@ export interface HistoryEntry {
 interface AppActions {
   setCurrentUser: (id: string) => void
   addCard: (input: Partial<Card> & { title: string; column: ColumnId }) => ActionResult
+  addChecklistItem: (cardId: string, text: string) => ActionResult
+  updateChecklistItem: (
+    cardId: string,
+    itemId: string,
+    patch: { text?: string; done?: boolean },
+  ) => ChecklistActionResult
+  deleteChecklistItem: (cardId: string, itemId: string) => ActionResult
+  moveChecklistItem: (cardId: string, itemId: string, toIndex: number) => ActionResult
   updateCard: (id: string, patch: Partial<Card>) => ActionResult
   deleteCard: (id: string) => void
   moveCard: (id: string, to: ColumnId, toIndex: number) => ActionResult
@@ -45,6 +57,10 @@ interface AppActions {
   updateSettings: (patch: Partial<Settings>) => void
   markInboxSeen: () => void
   resetDemo: () => void
+  importBoard: (board: {
+    cards: Card[]
+    columnOrder: AppData['columnOrder']
+  }) => void
   importData: (json: string) => ActionResult
   exportData: () => string
   undo: () => string | null
@@ -103,6 +119,7 @@ export const useAppStore = create<AppStore>()(
           blocked: input.blocked ?? false,
           blockedReason: input.blockedReason ?? '',
           comments: input.comments ?? [],
+          checklist: input.checklist ?? [],
           requestId: input.requestId ?? null,
           createdAt: input.createdAt ?? now,
           updatedAt: now,
@@ -200,6 +217,167 @@ export const useAppStore = create<AppStore>()(
             })),
           }
         })
+        return { ok: true }
+      },
+
+      addChecklistItem: (cardId, text) => {
+        const trimmed = text.trim()
+        if (!trimmed) return { ok: false, reason: 'Checklist item text cannot be empty.' }
+        const state = get()
+        const card = state.cards.find((item) => item.id === cardId)
+        if (!card) return { ok: false, reason: 'Card not found.' }
+        const now = new Date().toISOString()
+        const item: ChecklistItem = { id: uid('check'), text: trimmed, done: false }
+        set((current) => ({
+          ...recordHistory(current, `Update checklist on '${card.title}'`),
+          cards: current.cards.map((currentCard) =>
+            currentCard.id === cardId
+              ? { ...currentCard, checklist: [...currentCard.checklist, item], updatedAt: now }
+              : currentCard,
+          ),
+          activity: addActivity(current.activity, makeActivity(current, {
+            kind: 'card_updated',
+            targetType: 'card',
+            targetId: cardId,
+            targetTitle: card.title,
+            detail: 'added a checklist item',
+            createdAt: now,
+          })),
+        }))
+        return { ok: true }
+      },
+
+      updateChecklistItem: (cardId, itemId, patch) => {
+        const state = get()
+        const card = state.cards.find((item) => item.id === cardId)
+        const item = card?.checklist.find((entry) => entry.id === itemId)
+        if (!card || !item) return { ok: false, reason: 'Checklist item not found.' }
+        const text = patch.text === undefined ? item.text : patch.text.trim()
+        if (!text) return { ok: false, reason: 'Checklist item text cannot be empty.' }
+        const done = patch.done ?? item.done
+        if (text === item.text && done === item.done) return { ok: true }
+
+        const checklist = card.checklist.map((entry) =>
+          entry.id === itemId ? { ...entry, text, done } : entry,
+        )
+        const completes = patch.done === true && !item.done &&
+          card.column !== 'done' && checklist.length > 0 && checklist.every((entry) => entry.done)
+        const reopens = patch.done === false && item.done &&
+          card.column === 'done' && card.checklist.length > 0 &&
+          card.checklist.every((entry) => entry.done)
+        const blockedReason = reopens ? wipBlockReason(state, card.id) : null
+        const autoMoved: ColumnId | undefined = completes
+          ? 'done'
+          : reopens
+            ? blockedReason ? 'todo' : 'doing'
+            : undefined
+        const now = new Date().toISOString()
+        const updatedCard = { ...card, checklist, updatedAt: now }
+        const label = completes
+          ? `Complete checklist on '${card.title}'`
+          : reopens
+            ? `Reopen '${card.title}'`
+            : `Update checklist on '${card.title}'`
+
+        set((current) => {
+          const movement = autoMoved
+            ? cardMoveChanges(current, updatedCard, autoMoved, 0, now)
+            : null
+          const activity = movement
+            ? addActivity(movement.activity, makeActivity(current, {
+                kind: 'card_updated',
+                targetType: 'card',
+                targetId: cardId,
+                targetTitle: card.title,
+                detail: 'updated checklist',
+                createdAt: now,
+              }))
+            : addActivity(current.activity, makeActivity(current, {
+                kind: 'card_updated',
+                targetType: 'card',
+                targetId: cardId,
+                targetTitle: card.title,
+                detail: 'updated checklist',
+                createdAt: now,
+              }))
+          return {
+            ...recordHistory(current, label),
+            ...(movement ?? {}),
+            cards: movement
+              ? movement.cards
+              : current.cards.map((currentCard) =>
+                  currentCard.id === cardId ? updatedCard : currentCard,
+                ),
+            activity,
+          }
+        })
+        return {
+          ok: true,
+          ...(autoMoved ? { autoMoved } : {}),
+          ...(blockedReason ? { reason: blockedReason } : {}),
+        }
+      },
+
+      deleteChecklistItem: (cardId, itemId) => {
+        const state = get()
+        const card = state.cards.find((item) => item.id === cardId)
+        if (!card || !card.checklist.some((item) => item.id === itemId)) return { ok: true }
+        const now = new Date().toISOString()
+        set((current) => ({
+          ...recordHistory(current, `Update checklist on '${card.title}'`),
+          cards: current.cards.map((currentCard) =>
+            currentCard.id === cardId
+              ? {
+                  ...currentCard,
+                  checklist: currentCard.checklist.filter((item) => item.id !== itemId),
+                  updatedAt: now,
+                }
+              : currentCard,
+          ),
+          activity: addActivity(current.activity, makeActivity(current, {
+            kind: 'card_updated',
+            targetType: 'card',
+            targetId: cardId,
+            targetTitle: card.title,
+            detail: 'removed a checklist item',
+            createdAt: now,
+          })),
+        }))
+        return { ok: true }
+      },
+
+      moveChecklistItem: (cardId, itemId, toIndex) => {
+        const state = get()
+        const card = state.cards.find((item) => item.id === cardId)
+        if (!card) return { ok: true }
+        const fromIndex = card.checklist.findIndex((item) => item.id === itemId)
+        if (fromIndex < 0) return { ok: true }
+        const checklist = [...card.checklist]
+        const [item] = checklist.splice(fromIndex, 1)
+        const destination = Number.isFinite(toIndex)
+          ? Math.min(checklist.length, Math.max(0, Math.trunc(toIndex)))
+          : checklist.length
+        checklist.splice(destination, 0, item)
+        if (checklist.every((entry, index) => entry.id === card.checklist[index]?.id)) {
+          return { ok: true }
+        }
+        const now = new Date().toISOString()
+        set((current) => ({
+          ...recordHistory(current, `Update checklist on '${card.title}'`),
+          cards: current.cards.map((currentCard) =>
+            currentCard.id === cardId
+              ? { ...currentCard, checklist, updatedAt: now }
+              : currentCard,
+          ),
+          activity: addActivity(current.activity, makeActivity(current, {
+            kind: 'card_updated',
+            targetType: 'card',
+            targetId: cardId,
+            targetTitle: card.title,
+            detail: 'reordered checklist items',
+            createdAt: now,
+          })),
+        }))
         return { ok: true }
       },
 
@@ -528,6 +706,7 @@ export const useAppStore = create<AppStore>()(
           blocked: false,
           blockedReason: '',
           comments: [],
+          checklist: [],
           requestId: request.id,
           createdAt: now,
           updatedAt: now,
@@ -597,6 +776,50 @@ export const useAppStore = create<AppStore>()(
         }))
       },
 
+      importBoard: (board) => {
+        set((state) => {
+          const now = new Date().toISOString()
+          const importedIds = new Set(board.cards.map((card) => card.id))
+          const claimedRequests = new Set<string>()
+          const firstCardByRequest = new Map<string, string>()
+          const cards = board.cards.map((card) => {
+            if (!card.requestId || !state.requests.some((request) => request.id === card.requestId)) {
+              return card.requestId ? { ...card, requestId: null } : card
+            }
+            if (claimedRequests.has(card.requestId)) return { ...card, requestId: null }
+            claimedRequests.add(card.requestId)
+            firstCardByRequest.set(card.requestId, card.id)
+            return card
+          })
+          const requests = state.requests.map((request) => {
+            let cardId = request.cardId
+            let status = request.status
+            if (cardId && !importedIds.has(cardId)) {
+              cardId = null
+              if (status === 'planned') status = 'open'
+            }
+            const firstCardId = firstCardByRequest.get(request.id)
+            if (firstCardId) cardId = firstCardId
+            if (cardId === request.cardId && status === request.status) return request
+            return { ...request, cardId, status, updatedAt: now }
+          })
+          return {
+            ...recordHistory(state, 'Import board'),
+            cards,
+            columnOrder: board.columnOrder,
+            requests,
+            activity: addActivity(state.activity, makeActivity(state, {
+              kind: 'card_updated',
+              targetType: 'card',
+              targetId: 'board',
+              targetTitle: 'Board',
+              detail: 'imported board',
+              createdAt: now,
+            })),
+          }
+        })
+      },
+
       importData: (json) => {
         let parsed: unknown
         try {
@@ -604,11 +827,10 @@ export const useAppStore = create<AppStore>()(
         } catch {
           return { ok: false, reason: 'Invalid JSON.' }
         }
-        if (!isAppData(parsed)) {
-          return { ok: false, reason: 'Import must be Relay data version 1.' }
-        }
+        const data = migrateWorkspaceData(parsed)
+        if (!data) return { ok: false, reason: 'Import must be Relay data version 1 or 2.' }
         set((state) => ({
-          ...parsed,
+          ...data,
           ...recordHistory(state, 'Import data'),
         }))
         return { ok: true }
@@ -644,9 +866,13 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'relay:data',
-      version: 1,
+      version: 2,
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => toAppData(state),
+      migrate: (persistedState, version) =>
+        version === 1
+          ? migrateWorkspaceData(persistedState) ?? createSeedData()
+          : (persistedState as AppData),
       merge: (persistedState, currentState) => {
         if (!persistedState || typeof persistedState !== 'object') return currentState
         const persisted = persistedState as Partial<AppData>
@@ -852,11 +1078,31 @@ function columnTitle(column: ColumnId): string {
   return column === 'todo' ? 'To do' : column === 'doing' ? 'Doing' : 'Done'
 }
 
-function isAppData(value: unknown): value is AppData {
+type LegacyAppData = Omit<AppData, 'version' | 'cards'> & {
+  version: 1
+  cards: Array<Omit<Card, 'checklist'> & { checklist?: ChecklistItem[] }>
+}
+
+function migrateWorkspaceData(value: unknown): AppData | null {
+  if (!isAppData(value)) return null
+  const data = value as AppData | LegacyAppData
+  return {
+    ...data,
+    version: 2,
+    cards: data.cards.map((card) => ({
+      ...card,
+      checklist: Array.isArray((card as Partial<Card>).checklist)
+        ? (card as Card).checklist
+        : [],
+    })),
+  }
+}
+
+function isAppData(value: unknown): value is AppData | LegacyAppData {
   if (typeof value !== 'object' || value === null) return false
   const data = value as Record<string, unknown>
   return (
-    data.version === 1 &&
+    (data.version === 1 || data.version === 2) &&
     Array.isArray(data.members) &&
     Array.isArray(data.cards) &&
     Array.isArray(data.requests) &&

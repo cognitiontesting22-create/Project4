@@ -100,15 +100,15 @@ export function SettingsView() {
           </ul>
         </Section>
 
-        <Section title="Data" description="Everything is stored in this browser. Export a backup regularly, or move a workspace between machines.">
+        <Section title="Workspace backup" description="Full workspace data is stored in this browser. Export a backup regularly, or move a workspace between machines.">
           <div className="flex flex-wrap items-center gap-2">
             <button className={btnSecondary} onClick={() => downloadJson(exportData())}>
               <Download className="h-4 w-4" />
-              Export JSON
+              Export workspace backup
             </button>
             <button className={btnSecondary} onClick={() => fileRef.current?.click()}>
               <Upload className="h-4 w-4" />
-              Import JSON
+              Import workspace backup
             </button>
             <input
               ref={fileRef}
