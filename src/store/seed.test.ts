@@ -73,4 +73,15 @@ describe('createSeedData', () => {
       expect(memberIds.has(comment.authorId)).toBe(true)
     }
   })
+
+  it('keeps fully complete checklists only on Done cards', () => {
+    const data = createSeedData()
+
+    expect(data.cards.find((card) => card.id === 'card-105')?.checklist.filter((item) => item.done))
+      .toHaveLength(2)
+    expect(data.cards.find((card) => card.id === 'card-109')?.checklist).toHaveLength(3)
+    for (const card of data.cards.filter((item) => item.column !== 'done')) {
+      expect(card.checklist.length > 0 && card.checklist.every((item) => item.done)).toBe(false)
+    }
+  })
 })

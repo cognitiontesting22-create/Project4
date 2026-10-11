@@ -65,7 +65,7 @@ const comments = (
     createdAt: ago(daysAgo),
   }))
 
-const cards: Card[] = [
+const cards: Card[] = ([
   {
     id: 'card-101',
     title: 'Harden webhook retry handling',
@@ -256,7 +256,25 @@ const cards: Card[] = [
     createdAt: ago(20),
     updatedAt: ago(6),
   },
-]
+] satisfies Omit<Card, 'checklist'>[]).map((card) => ({
+  ...card,
+  checklist:
+    card.id === 'card-105'
+      ? [
+          { id: 'check-105-1', text: 'Profile cold-start baseline', done: true },
+          { id: 'check-105-2', text: 'Remove redundant model setup', done: true },
+          { id: 'check-105-3', text: 'Measure the optimized path', done: false },
+          { id: 'check-105-4', text: 'Update startup regression test', done: false },
+          { id: 'check-105-5', text: 'Roll out to production', done: false },
+        ]
+      : card.id === 'card-109'
+        ? [
+            { id: 'check-109-1', text: 'Enable streamed responses', done: true },
+            { id: 'check-109-2', text: 'Verify customer workspaces', done: true },
+            { id: 'check-109-3', text: 'Publish rollout notes', done: true },
+          ]
+        : [],
+}))
 
 const requests: FeatureRequest[] = [
   {
@@ -414,7 +432,7 @@ const activity: Activity[] = [
 
 export function createSeedData(): AppData {
   return {
-    version: 1,
+    version: 2,
     members,
     currentUserId: 'elena',
     cards,

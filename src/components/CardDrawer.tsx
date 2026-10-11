@@ -1,12 +1,13 @@
 import { ArrowUpRight, Trash, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { COLUMNS, type Card, type CardType, type ColumnId, type Priority } from '../domain/types'
+import { COLUMNS, type Card, type CardType, type ChecklistItem, type ColumnId, type Priority } from '../domain/types'
 import { wipBlockReason } from '../domain/wip'
 import { btnDanger, btnPrimary, btnSecondary, inputCls, PRIORITY_META, relativeTime, TYPE_META } from '../lib/meta'
 import { normalizeLabels } from '../lib/filters'
 import { useToastStore } from '../lib/toast'
 import { useUiStore } from '../lib/ui-store'
 import { useAppStore } from '../store/useAppStore'
+import { ChecklistEditor } from './ChecklistEditor'
 import { CommentThread } from './CommentThread'
 import { Drawer, Field } from './Drawer'
 
@@ -46,7 +47,16 @@ export function CardDrawer() {
   const members = useAppStore((s) => s.members)
   const requests = useAppStore((s) => s.requests)
   const settings = useAppStore((s) => s.settings)
-  const { addCard, updateCard, deleteCard, addComment } = useAppStore.getState()
+  const {
+    addCard,
+    updateCard,
+    deleteCard,
+    addComment,
+    addChecklistItem,
+    updateChecklistItem,
+    deleteChecklistItem,
+    moveChecklistItem,
+  } = useAppStore.getState()
   const showToast = useToastStore((s) => s.showToast)
 
   const card = state.mode === 'edit' ? cards.find((c) => c.id === state.id) : undefined
@@ -56,12 +66,13 @@ export function CardDrawer() {
     [cards],
   )
   const [draft, setDraft] = useState<Draft | null>(null)
+  const [stagedChecklist, setStagedChecklist] = useState<ChecklistItem[]>([])
   const [labelInput, setLabelInput] = useState('')
   const [confirmDelete, setConfirmDelete] = useState(false)
 
   const key =
     state.mode === 'edit'
-      ? `${state.id}:${card?.updatedAt ?? 'missing'}`
+      ? `${state.id}:${card ? JSON.stringify(toDraft(card)) : 'missing'}`
       : state.mode === 'new'
         ? `new:${state.column}`
         : null
@@ -72,10 +83,14 @@ export function CardDrawer() {
     }
     setConfirmDelete(false)
     setLabelInput('')
-    if (state.mode === 'new') setDraft(toDraft({ column: state.column }))
+    if (state.mode === 'new') {
+      setDraft(toDraft({ column: state.column }))
+      setStagedChecklist([])
+    }
     else if (state.mode === 'edit') {
       const c = useAppStore.getState().cards.find((x) => x.id === state.id)
       setDraft(c ? toDraft(c) : null)
+      setStagedChecklist([])
     } else setDraft(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key])
@@ -118,12 +133,87 @@ export function CardDrawer() {
     }
     const result = card
       ? updateCard(card.id, patch)
-      : addCard({ ...patch, title: draft.title.trim(), column: draft.column })
+      : addCard({
+          ...patch,
+          title: draft.title.trim(),
+          column: draft.column,
+          checklist: stagedChecklist,
+        })
     if (!result.ok) {
       showToast({ message: result.reason, variant: 'error' })
       return
     }
     close()
+  }
+
+  const addChecklist = (text: string, item: ChecklistItem): boolean => {
+    if (state.mode === 'new') {
+      setStagedChecklist((current) => [...current, item])
+      return true
+    }
+    if (!card) return false
+    const result = addChecklistItem(card.id, text)
+    if (!result.ok) showToast({ message: result.reason, variant: 'error' })
+    return result.ok
+  }
+
+  const updateChecklist = (
+    itemId: string,
+    patch: { text?: string; done?: boolean },
+  ) => {
+    if (state.mode === 'new') {
+      setStagedChecklist((current) =>
+        current.map((item) => (item.id === itemId ? { ...item, ...patch } : item)),
+      )
+      return
+    }
+    if (!card) return
+    const result = updateChecklistItem(card.id, itemId, patch)
+    if (!result.ok) {
+      showToast({ message: result.reason, variant: 'error' })
+      return
+    }
+    if (result.autoMoved) {
+      const current = useAppStore.getState()
+      const currentCard = current.cards.find((item) => item.id === card.id)
+      const action = {
+        label: 'Undo',
+        onClick: () => {
+          const label = useAppStore.getState().undo()
+          if (label) showToast({ message: `Undid: ${label}`, variant: 'info' })
+        },
+      }
+      const message =
+        result.autoMoved === 'done'
+          ? `Moved to Done: all ${currentCard?.checklist.length ?? 0} items complete`
+          : result.autoMoved === 'doing'
+            ? 'Moved back to Doing: checklist reopened'
+            : `Moved to To do: Doing is full (${current.columnOrder.doing.length}/${current.settings.doingWipLimit})`
+      showToast({ message, variant: 'info', action })
+    }
+  }
+
+  const deleteChecklist = (itemId: string) => {
+    if (state.mode === 'new') {
+      setStagedChecklist((current) => current.filter((item) => item.id !== itemId))
+    } else if (card) {
+      deleteChecklistItem(card.id, itemId)
+    }
+  }
+
+  const reorderChecklist = (itemId: string, toIndex: number) => {
+    if (state.mode === 'new') {
+      setStagedChecklist((current) => {
+        const fromIndex = current.findIndex((item) => item.id === itemId)
+        if (fromIndex < 0) return current
+        const next = [...current]
+        const [item] = next.splice(fromIndex, 1)
+        next.splice(Math.min(next.length, Math.max(0, toIndex)), 0, item)
+        return next
+      })
+    } else if (card) {
+      moveChecklistItem(card.id, itemId, toIndex)
+    }
   }
 
   return (
@@ -310,6 +400,15 @@ export function CardDrawer() {
         </div>
         <button type="submit" hidden />
       </form>
+
+      <ChecklistEditor
+        key={state.mode === 'edit' ? `edit:${state.id}` : `new:${state.column}`}
+        items={card?.checklist ?? stagedChecklist}
+        onAdd={addChecklist}
+        onUpdate={updateChecklist}
+        onDelete={deleteChecklist}
+        onReorder={reorderChecklist}
+      />
 
       {card && (
         <>

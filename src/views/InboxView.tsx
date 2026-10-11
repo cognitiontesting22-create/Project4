@@ -64,10 +64,10 @@ export function InboxView() {
             return (
               <li key={a.id}>
                 <button onClick={() => open(a)} disabled={!exists} className={clsx('flex w-full gap-3 px-5 py-4 text-left', exists && 'hover:bg-slate-50', unread && 'bg-indigo-50/40')}>
-                  <Avatar member={actor} />
+                  <Avatar member={actor} formerMember={!actor} />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm">
-                      <span className="font-semibold text-slate-900">{actor?.name ?? 'Someone'}</span>
+                      <span className="font-semibold text-slate-900">{actor?.name ?? 'Former member'}</span>
                       {actor && <RoleBadge member={actor} />}
                       <span className="text-slate-600">{a.detail}</span>
                     </div>

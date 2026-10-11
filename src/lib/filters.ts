@@ -16,16 +16,7 @@ export function filterCards(cards: Card[], filters: BoardFilters): Card[] {
   return cards.filter((card) => {
     if (
       query &&
-      ![
-        card.title,
-        card.description,
-        card.customer,
-        card.blockedReason,
-        ...card.labels,
-      ]
-        .join(' ')
-        .toLowerCase()
-        .includes(query)
+      !`${card.title} ${card.description}`.toLocaleLowerCase().includes(query)
     ) {
       return false
     }

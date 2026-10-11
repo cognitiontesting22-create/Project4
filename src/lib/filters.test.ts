@@ -17,6 +17,7 @@ const card = (id: string, labels: string[]): Card => ({
   blocked: false,
   blockedReason: '',
   comments: [],
+  checklist: [],
   requestId: null,
   createdAt: '',
   updatedAt: '',
@@ -32,6 +33,18 @@ const emptyFilters: BoardFilters = {
 }
 
 describe('board filters', () => {
+  it('matches titles and descriptions case-insensitively after trimming the query only', () => {
+    const cards = [
+      { ...card('one', []), title: 'Fix SSO' },
+      { ...card('two', []), description: 'Add retry handling' },
+      { ...card('three', ['retry']), customer: 'Retry Logistics' },
+      { ...card('four', []), blockedReason: 'Retry the deployment' },
+    ]
+
+    expect(filterCards(cards, { ...emptyFilters, query: '  sSo ' }).map((item) => item.id)).toEqual(['one'])
+    expect(filterCards(cards, { ...emptyFilters, query: 'RETRY' }).map((item) => item.id)).toEqual(['two'])
+  })
+
   it('matches any selected label without case sensitivity', () => {
     const cards = [card('one', ['API']), card('two', ['onboarding']), card('three', ['infra'])]
 

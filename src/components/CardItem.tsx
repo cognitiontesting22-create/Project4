@@ -1,8 +1,9 @@
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import clsx from 'clsx'
-import { Ban, Building, Calendar, Link2, MessageSquare } from 'lucide-react'
+import { Ban, Building, Calendar, Check, Link2, MessageSquare } from 'lucide-react'
 import type { Card, Member } from '../domain/types'
+import { descriptionSnippet, highlight } from '../lib/highlight'
 import { dueState, formatDue, PRIORITY_META, TYPE_META } from '../lib/meta'
 import { Avatar } from './Avatar'
 
@@ -13,9 +14,10 @@ interface Props {
   onLabelFilter?: (label: string) => void
   onCardKeyDown?: (event: React.KeyboardEvent<HTMLDivElement>) => void
   overlay?: boolean
+  query?: string
 }
 
-export function CardView({ card, assignee, onOpen, onLabelFilter, overlay }: Props) {
+export function CardView({ card, assignee, onOpen, onLabelFilter, overlay, query = '' }: Props) {
   const type = TYPE_META[card.type]
   const TypeIcon = type.icon
   const due = card.column === 'done' ? null : dueState(card.dueDate)
@@ -47,8 +49,42 @@ export function CardView({ card, assignee, onOpen, onLabelFilter, overlay }: Pro
         )}
       </div>
       <p className={clsx('text-sm font-medium leading-snug text-slate-900', card.column === 'done' && 'text-slate-500 line-through decoration-slate-300')}>
-        {card.title}
+        {highlight(card.title, query)}
       </p>
+      {query.trim() &&
+        !card.title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()) &&
+        card.description.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()) && (
+          <p className="mt-1 truncate text-xs leading-snug text-slate-500">
+            {highlight(descriptionSnippet(card.description, query), query)}
+          </p>
+        )}
+      {card.checklist.length > 0 && (
+        <div className="mt-2.5">
+          <div
+            className={clsx(
+              'inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium',
+              card.checklist.every((item) => item.done)
+                ? 'bg-emerald-50 text-emerald-700'
+                : 'bg-slate-100 text-slate-600',
+            )}
+            aria-label={`${card.checklist.filter((item) => item.done).length} of ${card.checklist.length} checklist items complete`}
+          >
+            <Check className="h-3 w-3" />
+            {card.checklist.filter((item) => item.done).length}/{card.checklist.length}
+          </div>
+          <div className="mt-1 h-1 overflow-hidden rounded-full bg-slate-100">
+            <div
+              className={clsx(
+                'h-full rounded-full transition-all',
+                card.checklist.every((item) => item.done) ? 'bg-emerald-500' : 'bg-indigo-400',
+              )}
+              style={{
+                width: `${(card.checklist.filter((item) => item.done).length / card.checklist.length) * 100}%`,
+              }}
+            />
+          </div>
+        </div>
+      )}
       {(card.customer || card.labels.length > 0) && (
         <div className="mt-2 flex flex-wrap gap-1">
           {card.customer && (

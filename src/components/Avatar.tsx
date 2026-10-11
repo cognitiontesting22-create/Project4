@@ -4,7 +4,26 @@ import { ROLE_META } from '../lib/meta'
 
 const SIZES = { xs: 'h-5 w-5 text-[9px]', sm: 'h-7 w-7 text-[11px]', md: 'h-9 w-9 text-xs' }
 
-export function Avatar({ member, size = 'sm', className }: { member?: Member; size?: keyof typeof SIZES; className?: string }) {
+export function Avatar({
+  member,
+  size = 'sm',
+  className,
+  formerMember = false,
+}: {
+  member?: Member
+  size?: keyof typeof SIZES
+  className?: string
+  formerMember?: boolean
+}) {
+  if (!member && formerMember)
+    return (
+      <span
+        title="Former member"
+        className={clsx(SIZES[size], 'inline-flex shrink-0 items-center justify-center rounded-full bg-slate-400 font-semibold text-white ring-2 ring-white', className)}
+      >
+        ?
+      </span>
+    )
   if (!member)
     return (
       <span
