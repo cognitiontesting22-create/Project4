@@ -511,6 +511,15 @@ describe('card dependencies', () => {
     expect(useAppStore.getState().moveCard('card-104', 'done', 0)).toEqual({ ok: true })
   })
 
+  it('names all three open blockers on drag and Status menu refusals', () => {
+    useAppStore.getState().updateCard('card-102', { blockedBy: ['card-106', 'card-101', 'card-105'] })
+    const reason =
+      "Blocked by 'Map Acme carrier aliases' (Doing), 'Harden webhook retry handling' (To do) and 'Reduce cold-start time for agent runs' (Doing). Move them to Done first."
+
+    expect(useAppStore.getState().moveCard('card-102', 'done', 0)).toEqual({ ok: false, reason })
+    expect(useAppStore.getState().updateCard('card-102', { column: 'done' })).toEqual({ ok: false, reason })
+  })
+
   it('keeps a blocked card in place when its checklist is completed', () => {
     useAppStore.getState().updateCard('card-105', { blockedBy: ['card-106'] })
     const items = cardById('card-105').checklist.filter((item) => !item.done)
