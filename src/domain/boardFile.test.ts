@@ -35,7 +35,37 @@ describe('board file format', () => {
       cards: seed.cards,
       columnOrder: seed.columnOrder,
       unassignedCount: 0,
+      droppedBlockerCount: 0,
     })
+    expect(JSON.parse(text).cards.find((card: { id: string }) => card.id === 'card-102').blockedBy)
+      .toEqual(['card-106'])
+  })
+
+  it('treats missing blockedBy as no blockers and rejects malformed lists', () => {
+    const data = boardData()
+    delete data.cards[0].blockedBy
+    const result = parse(data)
+    expect(result.ok && result.cards[0].blockedBy).toEqual([])
+
+    data.cards[0].blockedBy = 'card-102'
+    expect(parse(data)).toEqual({
+      ok: false,
+      reason: "Card 1 ('Harden webhook retry handling') has an invalid blocked-by list",
+    })
+  })
+
+  it('drops blocker links to missing cards, self links, and links that would form a cycle', () => {
+    const data = boardData()
+    data.cards[0].blockedBy = ['card-gone', 'card-101', 'card-105']
+    data.cards[4].blockedBy = ['card-101']
+    const result = parse(data)
+
+    expect(result).toMatchObject({ ok: true, droppedBlockerCount: 3 })
+    if (result.ok) {
+      expect(result.cards[0].blockedBy).toEqual(['card-105'])
+      expect(result.cards[4].blockedBy).toEqual([])
+      expect(result.cards.find((card) => card.id === 'card-102')?.blockedBy).toEqual(['card-106'])
+    }
   })
 
   it('rejects files larger than 5 MB', () => {

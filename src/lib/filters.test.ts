@@ -16,6 +16,7 @@ const card = (id: string, labels: string[]): Card => ({
   dueDate: null,
   blocked: false,
   blockedReason: '',
+  blockedBy: [],
   comments: [],
   checklist: [],
   requestId: null,

@@ -1,3 +1,4 @@
+import { isDependencyBlocked } from '../domain/dependencies'
 import type { Card, CardType } from '../domain/types'
 
 export interface BoardFilters {
@@ -25,7 +26,7 @@ export function filterCards(cards: Card[], filters: BoardFilters): Card[] {
     }
     if (filters.type && card.type !== filters.type) return false
     if (filters.customer && card.customer !== filters.customer) return false
-    if (filters.blockedOnly && !card.blocked) return false
+    if (filters.blockedOnly && !card.blocked && !isDependencyBlocked(cards, card)) return false
     if (labels.length && !card.labels.some((label) => labels.includes(label.trim().toLowerCase()))) {
       return false
     }
