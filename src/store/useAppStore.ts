@@ -4,6 +4,11 @@ import { ACTIVE_STATUSES, parseMentions, votesUsed } from '../domain/scoring'
 import { uid } from '../domain/ids'
 import { normalizeLabels } from '../lib/filters'
 import { wipBlockReason } from '../domain/wip'
+import {
+  blockerLinkReason,
+  dependencyBlockReason,
+  normalizeBlockedBy,
+} from '../domain/dependencies'
 import type {
   Activity,
   ActivityKind,
@@ -103,6 +108,12 @@ export const useAppStore = create<AppStore>()(
 
         const now = new Date().toISOString()
         const id = input.id ?? uid('card')
+        const blockers = requestedBlockers(state.cards, input.blockedBy ?? [], id)
+        const linkReason = blockers.flatMap((blockerId) => blockerLinkReason(state.cards, id, blockerId) ?? [])[0]
+        if (linkReason) return { ok: false, reason: linkReason }
+        const blockedBy = blockers.filter((blockerId) => blockerId !== id)
+        const doneReason = input.column === 'done' ? dependencyBlockReason(state.cards, blockedBy) : null
+        if (doneReason) return { ok: false, reason: doneReason }
         const card: Card = {
           ...input,
           id,
@@ -118,6 +129,7 @@ export const useAppStore = create<AppStore>()(
           dueDate: input.dueDate ?? null,
           blocked: input.blocked ?? false,
           blockedReason: input.blockedReason ?? '',
+          blockedBy,
           comments: input.comments ?? [],
           checklist: input.checklist ?? [],
           requestId: input.requestId ?? null,
@@ -147,15 +159,28 @@ export const useAppStore = create<AppStore>()(
         const state = get()
         const card = state.cards.find((item) => item.id === id)
         if (!card) return { ok: true }
+        let blockedBy: string[] | undefined
+        if (patch.blockedBy) {
+          const blockers = requestedBlockers(state.cards, patch.blockedBy, id)
+          for (const blockerId of blockers) {
+            if (card.blockedBy.includes(blockerId)) continue
+            const linkReason = blockerLinkReason(state.cards, id, blockerId)
+            if (linkReason) return { ok: false, reason: linkReason }
+          }
+          blockedBy = blockers.filter((blockerId) => blockerId !== id)
+        }
         const normalizedPatch = {
           ...patch,
           ...(patch.labels ? { labels: normalizeLabels(patch.labels) } : {}),
+          ...(blockedBy ? { blockedBy } : {}),
         }
         const destination = normalizedPatch.column ?? card.column
         const reason =
           destination === 'doing' && card.column !== 'doing'
             ? wipBlockReason(state, id)
-            : null
+            : destination === 'done' && card.column !== 'done'
+              ? dependencyBlockReason(state.cards, normalizedPatch.blockedBy ?? card.blockedBy)
+              : null
         if (reason) return { ok: false, reason }
 
         const detailPatch = { ...normalizedPatch }
@@ -205,15 +230,26 @@ export const useAppStore = create<AppStore>()(
 
         set((current) => {
           const updatedCard = { ...card, ...normalizedPatch, id: card.id, updatedAt: now }
+          const blockerDetail = hasDifferentValues(
+            { ...card, blockedBy: updatedCard.blockedBy },
+            detailPatch,
+          )
+            ? null
+            : blockerChangeDetail(current.cards, card.blockedBy, updatedCard.blockedBy)
           return {
-            ...recordHistory(current, `Edit '${updatedCard.title}'`),
+            ...recordHistory(
+              current,
+              blockerDetail
+                ? `Update blockers on '${updatedCard.title}'`
+                : `Edit '${updatedCard.title}'`,
+            ),
             cards: current.cards.map((item) => (item.id === id ? updatedCard : item)),
             activity: addActivity(current.activity, makeActivity(current, {
               kind: 'card_updated',
               targetType: 'card',
               targetId: id,
               targetTitle: updatedCard.title,
-              detail: 'updated card details',
+              detail: blockerDetail ?? 'updated card details',
             })),
           }
         })
@@ -265,15 +301,19 @@ export const useAppStore = create<AppStore>()(
         const reopens = patch.done === false && item.done &&
           card.column === 'done' && card.checklist.length > 0 &&
           card.checklist.every((entry) => entry.done)
-        const blockedReason = reopens ? wipBlockReason(state, card.id) : null
+        const blockedReason = reopens
+          ? wipBlockReason(state, card.id)
+          : completes
+            ? dependencyBlockReason(state.cards, card.blockedBy)
+            : null
         const autoMoved: ColumnId | undefined = completes
-          ? 'done'
+          ? blockedReason ? undefined : 'done'
           : reopens
             ? blockedReason ? 'todo' : 'doing'
             : undefined
         const now = new Date().toISOString()
         const updatedCard = { ...card, checklist, updatedAt: now }
-        const label = completes
+        const label = autoMoved === 'done'
           ? `Complete checklist on '${card.title}'`
           : reopens
             ? `Reopen '${card.title}'`
@@ -415,7 +455,13 @@ export const useAppStore = create<AppStore>()(
 
           return {
             ...recordHistory(state, `Delete '${card.title}'`),
-            cards: state.cards.filter((item) => item.id !== id),
+            cards: state.cards
+              .filter((item) => item.id !== id)
+              .map((item) =>
+                item.blockedBy.includes(id)
+                  ? { ...item, blockedBy: item.blockedBy.filter((blockerId) => blockerId !== id) }
+                  : item,
+              ),
             columnOrder: removeCardFromOrder(state.columnOrder, id),
             requests: linkedRequest
               ? state.requests.map((request) =>
@@ -438,7 +484,12 @@ export const useAppStore = create<AppStore>()(
         const state = get()
         const card = state.cards.find((item) => item.id === id)
         if (!card) return { ok: true }
-        const reason = to === 'doing' && card.column !== 'doing' ? wipBlockReason(state, id) : null
+        const reason =
+          to === 'doing' && card.column !== 'doing'
+            ? wipBlockReason(state, id)
+            : to === 'done' && card.column !== 'done'
+              ? dependencyBlockReason(state.cards, card.blockedBy)
+              : null
         if (reason) return { ok: false, reason }
 
         const now = new Date().toISOString()
@@ -705,6 +756,7 @@ export const useAppStore = create<AppStore>()(
           dueDate: null,
           blocked: false,
           blockedReason: '',
+          blockedBy: [],
           comments: [],
           checklist: [],
           requestId: request.id,
@@ -782,7 +834,12 @@ export const useAppStore = create<AppStore>()(
           const importedIds = new Set(board.cards.map((card) => card.id))
           const claimedRequests = new Set<string>()
           const firstCardByRequest = new Map<string, string>()
-          const cards = board.cards.map((card) => {
+          const cards = board.cards.map((original) => {
+            const blockedBy = normalizeBlockedBy(original.blockedBy, original.id, importedIds)
+            const card =
+              blockedBy.length === original.blockedBy.length
+                ? original
+                : { ...original, blockedBy }
             if (!card.requestId || !state.requests.some((request) => request.id === card.requestId)) {
               return card.requestId ? { ...card, requestId: null } : card
             }
@@ -828,7 +885,7 @@ export const useAppStore = create<AppStore>()(
           return { ok: false, reason: 'Invalid JSON.' }
         }
         const data = migrateWorkspaceData(parsed)
-        if (!data) return { ok: false, reason: 'Import must be Relay data version 1 or 2.' }
+        if (!data) return { ok: false, reason: 'Import must be Relay data version 1, 2 or 3.' }
         set((state) => ({
           ...data,
           ...recordHistory(state, 'Import data'),
@@ -866,11 +923,11 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'relay:data',
-      version: 2,
+      version: 3,
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => toAppData(state),
       migrate: (persistedState, version) =>
-        version === 1
+        version < 3
           ? migrateWorkspaceData(persistedState) ?? createSeedData()
           : (persistedState as AppData),
       merge: (persistedState, currentState) => {
@@ -1074,26 +1131,49 @@ function removeCardFromOrder(
   }
 }
 
+function requestedBlockers(cards: Card[], blockedBy: string[], cardId: string): string[] {
+  const known = new Set([...cards.map((card) => card.id), cardId])
+  return [...new Set(blockedBy)].filter((id) => known.has(id))
+}
+
+function blockerChangeDetail(cards: Card[], before: string[], after: string[]): string | null {
+  const added = after.filter((id) => !before.includes(id))
+  const removed = before.filter((id) => !after.includes(id))
+  const title = (id: string) => cards.find((card) => card.id === id)?.title ?? id
+  if (added.length === 1 && removed.length === 0) return `added blocker '${title(added[0])}'`
+  if (removed.length === 1 && added.length === 0) return `removed blocker '${title(removed[0])}'`
+  if (added.length || removed.length) return 'updated blockers'
+  return null
+}
+
 function columnTitle(column: ColumnId): string {
   return column === 'todo' ? 'To do' : column === 'doing' ? 'Doing' : 'Done'
 }
 
 type LegacyAppData = Omit<AppData, 'version' | 'cards'> & {
-  version: 1
-  cards: Array<Omit<Card, 'checklist'> & { checklist?: ChecklistItem[] }>
+  version: 1 | 2
+  cards: Array<
+    Omit<Card, 'checklist' | 'blockedBy'> & { checklist?: ChecklistItem[]; blockedBy?: unknown }
+  >
 }
 
 function migrateWorkspaceData(value: unknown): AppData | null {
   if (!isAppData(value)) return null
   const data = value as AppData | LegacyAppData
+  const ids = new Set(data.cards.map((card) => card.id))
   return {
     ...data,
-    version: 2,
+    version: 3,
     cards: data.cards.map((card) => ({
       ...card,
-      checklist: Array.isArray((card as Partial<Card>).checklist)
-        ? (card as Card).checklist
-        : [],
+      checklist: Array.isArray(card.checklist) ? card.checklist : [],
+      blockedBy: normalizeBlockedBy(
+        Array.isArray(card.blockedBy)
+          ? card.blockedBy.filter((id): id is string => typeof id === 'string')
+          : [],
+        card.id,
+        ids,
+      ),
     })),
   }
 }
@@ -1102,7 +1182,7 @@ function isAppData(value: unknown): value is AppData | LegacyAppData {
   if (typeof value !== 'object' || value === null) return false
   const data = value as Record<string, unknown>
   return (
-    (data.version === 1 || data.version === 2) &&
+    (data.version === 1 || data.version === 2 || data.version === 3) &&
     Array.isArray(data.members) &&
     Array.isArray(data.cards) &&
     Array.isArray(data.requests) &&

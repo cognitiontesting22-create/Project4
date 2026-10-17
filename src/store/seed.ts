@@ -256,8 +256,10 @@ const cards: Card[] = ([
     createdAt: ago(20),
     updatedAt: ago(6),
   },
-] satisfies Omit<Card, 'checklist'>[]).map((card) => ({
+] satisfies Omit<Card, 'checklist' | 'blockedBy'>[]).map((card) => ({
   ...card,
+  blockedBy:
+    card.id === 'card-102' ? ['card-106'] : card.id === 'card-104' ? ['card-110'] : [],
   checklist:
     card.id === 'card-105'
       ? [
@@ -432,7 +434,7 @@ const activity: Activity[] = [
 
 export function createSeedData(): AppData {
   return {
-    version: 2,
+    version: 3,
     members,
     currentUserId: 'elena',
     cards,

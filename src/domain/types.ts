@@ -47,6 +47,7 @@ export interface Card {
   dueDate: string | null // YYYY-MM-DD
   blocked: boolean
   blockedReason: string
+  blockedBy: string[] // ids of cards that must be Done before this one can move to Done
   comments: Comment[]
   checklist: ChecklistItem[]
   requestId: string | null // feature request this card was promoted from
@@ -114,7 +115,7 @@ export interface Settings {
 }
 
 export interface AppData {
-  version: 2
+  version: 3
   members: Member[]
   currentUserId: string
   cards: Card[]

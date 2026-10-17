@@ -211,16 +211,35 @@ describe('useAppStore', () => {
     const legacy = {
       ...current,
       version: 1,
-      cards: current.cards.map(({ checklist: _checklist, ...card }) => card),
+      cards: current.cards.map(({ checklist: _checklist, blockedBy: _blockedBy, ...card }) => card),
     }
     expect(useAppStore.getState().importData(JSON.stringify(legacy))).toEqual({ ok: true })
-    expect(useAppStore.getState().version).toBe(2)
+    expect(useAppStore.getState().version).toBe(3)
     expect(useAppStore.getState().cards.every((card) => Array.isArray(card.checklist))).toBe(true)
+    expect(useAppStore.getState().cards.every((card) => card.blockedBy.length === 0)).toBe(true)
 
     localStorage.setItem('relay:data', JSON.stringify({ state: legacy, version: 1 }))
     await useAppStore.persist.rehydrate()
-    expect(useAppStore.getState().version).toBe(2)
+    expect(useAppStore.getState().version).toBe(3)
     expect(useAppStore.getState().cards.every((card) => Array.isArray(card.checklist))).toBe(true)
+  })
+
+  it('migrates v2 data to version 3 with empty blockers and drops unknown blocker ids', async () => {
+    const current = createSeedData()
+    const v2 = {
+      ...current,
+      version: 2,
+      cards: current.cards.map(({ blockedBy: _blockedBy, ...card }) =>
+        card.id === 'card-101' ? { ...card, blockedBy: ['card-105', 'missing', 'card-101'] } : card,
+      ),
+    }
+    localStorage.setItem('relay:data', JSON.stringify({ state: v2, version: 2 }))
+    await useAppStore.persist.rehydrate()
+    const cards = useAppStore.getState().cards
+    expect(useAppStore.getState().version).toBe(3)
+    expect(cards.find((card) => card.id === 'card-101')?.blockedBy).toEqual(['card-105'])
+    expect(cards.filter((card) => card.id !== 'card-101').every((card) => card.blockedBy.length === 0))
+      .toBe(true)
   })
 
   it('imports only board data, repairs request links, and restores everything in one undo', () => {
@@ -437,5 +456,157 @@ describe('useAppStore', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('card dependencies', () => {
+  const cardById = (id: string) => useAppStore.getState().cards.find((card) => card.id === id)!
+  const blockedReason = "Blocked by 'Map Acme carrier aliases' (Doing). Move it to Done first."
+
+  it('refuses dragging or keyboard-moving a blocked card into Done and names the blocker', () => {
+    const before = useAppStore.getState().exportData()
+
+    expect(useAppStore.getState().moveCard('card-102', 'done', 0)).toEqual({
+      ok: false,
+      reason: blockedReason,
+    })
+    expect(useAppStore.getState().exportData()).toBe(before)
+    expect(useAppStore.getState().past).toHaveLength(0)
+
+    expect(useAppStore.getState().moveCard('card-106', 'done', 0)).toEqual({ ok: true })
+    expect(useAppStore.getState().moveCard('card-102', 'done', 0)).toEqual({ ok: true })
+    expect(cardById('card-102').column).toBe('done')
+  })
+
+  it('lets a blocked card move between To do and Doing', () => {
+    useAppStore.getState().updateSettings({ doingWipLimit: 0 })
+    expect(useAppStore.getState().moveCard('card-102', 'doing', 0)).toEqual({ ok: true })
+    expect(useAppStore.getState().moveCard('card-102', 'todo', 0)).toEqual({ ok: true })
+  })
+
+  it('refuses the Status menu and new cards into Done while a blocker is open', () => {
+    const store = useAppStore.getState()
+    const before = store.exportData()
+
+    expect(store.updateCard('card-102', { column: 'done' })).toEqual({ ok: false, reason: blockedReason })
+    expect(store.updateCard('card-101', { column: 'done', blockedBy: ['card-106'] }))
+      .toEqual({ ok: false, reason: blockedReason })
+    expect(store.addCard({ title: 'Born done', column: 'done', blockedBy: ['card-106'] }))
+      .toEqual({ ok: false, reason: blockedReason })
+    expect(useAppStore.getState().exportData()).toBe(before)
+    expect(useAppStore.getState().past).toHaveLength(0)
+
+    expect(store.updateCard('card-102', { column: 'done', blockedBy: [] })).toEqual({ ok: true })
+    expect(cardById('card-102')).toMatchObject({ column: 'done', blockedBy: [] })
+  })
+
+  it('names every open blocker but ignores blockers already in Done', () => {
+    useAppStore.getState().updateCard('card-102', { blockedBy: ['card-106', 'card-110', 'card-101'] })
+
+    expect(useAppStore.getState().moveCard('card-102', 'done', 0)).toEqual({
+      ok: false,
+      reason:
+        "Blocked by 'Map Acme carrier aliases' (Doing) and 'Harden webhook retry handling' (To do). Move them to Done first.",
+    })
+    expect(useAppStore.getState().moveCard('card-104', 'done', 0)).toEqual({ ok: true })
+  })
+
+  it('names all three open blockers on drag and Status menu refusals', () => {
+    useAppStore.getState().updateCard('card-102', { blockedBy: ['card-106', 'card-101', 'card-105'] })
+    const reason =
+      "Blocked by 'Map Acme carrier aliases' (Doing), 'Harden webhook retry handling' (To do) and 'Reduce cold-start time for agent runs' (Doing). Move them to Done first."
+
+    expect(useAppStore.getState().moveCard('card-102', 'done', 0)).toEqual({ ok: false, reason })
+    expect(useAppStore.getState().updateCard('card-102', { column: 'done' })).toEqual({ ok: false, reason })
+  })
+
+  it('keeps a blocked card in place when its checklist is completed', () => {
+    useAppStore.getState().updateCard('card-105', { blockedBy: ['card-106'] })
+    const items = cardById('card-105').checklist.filter((item) => !item.done)
+    for (const item of items.slice(0, -1)) {
+      useAppStore.getState().updateChecklistItem('card-105', item.id, { done: true })
+    }
+
+    expect(useAppStore.getState().updateChecklistItem('card-105', items[items.length - 1].id, { done: true }))
+      .toEqual({ ok: true, reason: blockedReason })
+    expect(cardById('card-105').column).toBe('doing')
+    expect(cardById('card-105').checklist.every((item) => item.done)).toBe(true)
+  })
+
+  it('refuses self, direct, and indirect cycles', () => {
+    const store = useAppStore.getState()
+
+    expect(store.updateCard('card-101', { blockedBy: ['card-101'] })).toEqual({
+      ok: false,
+      reason: "A card can't block itself.",
+    })
+    expect(store.updateCard('card-106', { blockedBy: ['card-102'] })).toEqual({
+      ok: false,
+      reason:
+        "Can't add 'Add guided mapping for Acme locations' as a blocker: it is already blocked by 'Map Acme carrier aliases', so this would create a cycle.",
+    })
+
+    expect(store.updateCard('card-106', { blockedBy: ['card-101'] })).toEqual({ ok: true })
+    expect(useAppStore.getState().updateCard('card-101', { blockedBy: ['card-102'] })).toEqual({
+      ok: false,
+      reason:
+        "Can't add 'Add guided mapping for Acme locations' as a blocker: it is already blocked by 'Harden webhook retry handling' through 'Map Acme carrier aliases', so this would create a cycle.",
+    })
+    expect(cardById('card-101').blockedBy).toEqual([])
+  })
+
+  it('leaves cards already in Done when a blocker moves back out of Done', () => {
+    useAppStore.getState().moveCard('card-106', 'done', 0)
+    useAppStore.getState().moveCard('card-102', 'done', 0)
+
+    expect(useAppStore.getState().moveCard('card-106', 'todo', 0)).toEqual({ ok: true })
+    expect(cardById('card-102').column).toBe('done')
+    expect(cardById('card-102').blockedBy).toEqual(['card-106'])
+  })
+
+  it('removes a deleted card from every blocked-by list and undo restores both', () => {
+    useAppStore.getState().updateCard('card-101', { blockedBy: ['card-106'] })
+    useAppStore.getState().deleteCard('card-106')
+
+    expect(cardById('card-101').blockedBy).toEqual([])
+    expect(cardById('card-102').blockedBy).toEqual([])
+    expect(useAppStore.getState().moveCard('card-102', 'done', 0)).toEqual({ ok: true })
+
+    useAppStore.getState().undo()
+    useAppStore.getState().undo()
+    expect(cardById('card-106')).toBeDefined()
+    expect(cardById('card-102').blockedBy).toEqual(['card-106'])
+    expect(cardById('card-101').blockedBy).toEqual(['card-106'])
+  })
+
+  it('records adding and removing a blocker as undoable changes', () => {
+    expect(useAppStore.getState().updateCard('card-101', { blockedBy: ['card-105'] })).toEqual({ ok: true })
+    expect(useAppStore.getState().activity[0].detail).toBe("added blocker 'Reduce cold-start time for agent runs'")
+    expect(useAppStore.getState().updateCard('card-101', { blockedBy: [] })).toEqual({ ok: true })
+    expect(useAppStore.getState().activity[0].detail).toBe("removed blocker 'Reduce cold-start time for agent runs'")
+
+    expect(useAppStore.getState().undo()).toBe("Update blockers on 'Harden webhook retry handling'")
+    expect(cardById('card-101').blockedBy).toEqual(['card-105'])
+    expect(useAppStore.getState().undo()).toBe("Update blockers on 'Harden webhook retry handling'")
+    expect(cardById('card-101').blockedBy).toEqual([])
+    expect(useAppStore.getState().redo()).toBe("Update blockers on 'Harden webhook retry handling'")
+    expect(cardById('card-101').blockedBy).toEqual(['card-105'])
+  })
+
+  it('drops imported blocker links to cards that are not on the imported board', () => {
+    const state = useAppStore.getState()
+    const cards = state.cards
+      .filter((card) => card.id !== 'card-106')
+      .map((card) => (card.id === 'card-101' ? { ...card, blockedBy: ['card-105'] } : card))
+    state.importBoard({
+      cards,
+      columnOrder: {
+        ...state.columnOrder,
+        doing: state.columnOrder.doing.filter((id) => id !== 'card-106'),
+      },
+    })
+
+    expect(cardById('card-102').blockedBy).toEqual([])
+    expect(cardById('card-101').blockedBy).toEqual(['card-105'])
   })
 })

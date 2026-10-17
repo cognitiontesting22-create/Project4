@@ -17,6 +17,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNod
 import { COLUMNS, type Card, type ColumnId, type Member } from '../domain/types'
 import { parseBoardFile, serializeBoard, type ParsedBoard } from '../domain/boardFile'
 import { wipBlockReason } from '../domain/wip'
+import { dependencyBlockReason, isDependencyBlocked, openBlockers } from '../domain/dependencies'
 import { Avatar } from '../components/Avatar'
 import { CardView, SortableCard } from '../components/CardItem'
 import { btnPrimary, COLUMN_ACCENT, TYPE_META } from '../lib/meta'
@@ -80,7 +81,7 @@ export function BoardView() {
 
   const [dragOrder, setDragOrder] = useState<Order | null>(null)
   const [activeId, setActiveId] = useState<string | null>(null)
-  const [blockedDoingHover, setBlockedDoingHover] = useState(false)
+  const [blockedHover, setBlockedHover] = useState<{ column: ColumnId; message: string } | null>(null)
   const [announcement, setAnnouncement] = useState('')
   const searchRef = useRef<HTMLInputElement>(null)
   const importFileRef = useRef<HTMLInputElement>(null)
@@ -118,7 +119,9 @@ export function BoardView() {
   const doingIsFull = wipLimit > 0 && doingCount >= wipLimit
   const doingBlockReason = wipBlockReason({ cards, settings }, null)
   const totalVisible = COLUMNS.reduce((count, column) => count + visibleOrder[column.id].length, 0)
-  const blockedCount = cards.filter((card) => card.blocked && card.column !== 'done').length
+  const blockedCount = cards.filter(
+    (card) => card.column !== 'done' && (card.blocked || isDependencyBlocked(cards, card)),
+  ).length
   const escalations = cards.filter((card) => card.type === 'escalation' && card.column !== 'done').length
 
   useEffect(() => {
@@ -175,20 +178,29 @@ export function BoardView() {
   const onDragStart = ({ active }: DragStartEvent) => {
     setActiveId(String(active.id))
     setDragOrder(visibleOrder)
-    setBlockedDoingHover(false)
+    setBlockedHover(null)
   }
 
   const onDragOver = ({ active, over }: DragOverEvent) => {
     if (!over) {
-      setBlockedDoingHover(false)
+      setBlockedHover(null)
       return
     }
     const activeCard = byId.get(String(active.id))
     const destination = containerOf(String(over.id), dragOrder ?? visibleOrder)
-    const blocked =
-      Boolean(activeCard && activeCard.column !== 'doing' && destination === 'doing' && doingIsFull)
-    setBlockedDoingHover(blocked)
-    if (blocked) return
+    const refusal =
+      activeCard && activeCard.column !== 'doing' && destination === 'doing' && doingIsFull
+        ? { column: 'doing' as const, message: `WIP limit reached · ${doingCount}/${wipLimit}` }
+        : activeCard && activeCard.column !== 'done' && destination === 'done'
+          ? (() => {
+              const reason = dependencyBlockReason(cards, activeCard.blockedBy)
+              return reason ? { column: 'done' as const, message: reason } : null
+            })()
+          : null
+    setBlockedHover((current) =>
+      current?.column === refusal?.column && current?.message === refusal?.message ? current : refusal,
+    )
+    if (refusal) return
 
     setDragOrder((previous) => {
       if (!previous) return previous
@@ -217,7 +229,7 @@ export function BoardView() {
     let final = dragOrder
     setActiveId(null)
     setDragOrder(null)
-    setBlockedDoingHover(false)
+    setBlockedHover(null)
     if (!final || !over) return
 
     const overId = String(over.id)
@@ -461,7 +473,7 @@ export function BoardView() {
         onDragCancel={() => {
           setActiveId(null)
           setDragOrder(null)
-          setBlockedDoingHover(false)
+          setBlockedHover(null)
         }}
       >
         <div className="grid min-h-0 flex-1 grid-cols-3 gap-5 overflow-x-auto px-8 py-6">
@@ -475,7 +487,7 @@ export function BoardView() {
                 count={fullCount}
                 wipLimit={column.id === 'doing' ? wipLimit : 0}
                 wipFull={column.id === 'doing' && doingIsFull}
-                blockedDragOver={column.id === 'doing' && blockedDoingHover}
+                blockedDragOver={blockedHover?.column === column.id ? blockedHover.message : null}
                 blockReason={column.id === 'doing' ? doingBlockReason : null}
                 onAdd={() => newCard(column.id)}
               >
@@ -488,6 +500,7 @@ export function BoardView() {
                         key={id}
                         card={card}
                         query={filters.query}
+                        blockers={openBlockers(cards, card.blockedBy)}
                         assignee={memberById.get(card.assigneeId ?? '')}
                         onOpen={() => openCard(id)}
                         onLabelFilter={toggleLabelFilter}
@@ -513,6 +526,7 @@ export function BoardView() {
             <CardView
               card={activeCard}
               query={filters.query}
+              blockers={openBlockers(cards, activeCard.blockedBy)}
               assignee={memberById.get(activeCard.assigneeId ?? '')}
               overlay
             />
@@ -549,7 +563,7 @@ function Column({
   count: number
   wipLimit: number
   wipFull: boolean
-  blockedDragOver: boolean
+  blockedDragOver: string | null
   blockReason: string | null
   onAdd: () => void
   children: ReactNode
@@ -591,7 +605,7 @@ function Column({
         {blockedDragOver && (
           <div className="rounded-lg bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700">
             <TriangleAlert className="mr-1 inline h-3.5 w-3.5" />
-            WIP limit reached · {count}/{wipLimit}
+            {blockedDragOver}
           </div>
         )}
         {children}
@@ -903,6 +917,7 @@ function BoardImportDialog({
 
   const confirmation = dialog.type === 'confirm' ? dialog : null
   const warningCount = confirmation?.board.unassignedCount ?? 0
+  const droppedBlockers = confirmation?.board.droppedBlockerCount ?? 0
   const warning =
       warningCount === 1
       ? "1 card will be unassigned because its assignee isn't on this team."
@@ -948,6 +963,13 @@ function BoardImportDialog({
             {warningCount > 0 && (
               <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
                 {warning}
+              </p>
+            )}
+            {droppedBlockers > 0 && (
+              <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                {droppedBlockers === 1
+                  ? '1 blocker link will be dropped because it points to a card that is not in this file or would create a cycle.'
+                  : `${droppedBlockers} blocker links will be dropped because they point to cards that are not in this file or would create a cycle.`}
               </p>
             )}
             <div className="mt-6 flex justify-end gap-2">

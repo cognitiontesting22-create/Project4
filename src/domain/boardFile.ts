@@ -1,5 +1,6 @@
 import type { AppData, Card, CardType, ColumnId, Priority } from './types'
 import { normalizeLabels } from '../lib/filters'
+import { blockerLinkReason } from './dependencies'
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024
 const COLUMNS = ['todo', 'doing', 'done'] as const
@@ -12,6 +13,7 @@ export type ParsedBoard =
       cards: Card[]
       columnOrder: Record<ColumnId, string[]>
       unassignedCount: number
+      droppedBlockerCount: number
     }
   | { ok: false; reason: string }
 
@@ -136,12 +138,32 @@ export function parseBoardFile(
     }
   }
 
+  const { cards: linkedCards, droppedBlockerCount } = repairBlockers(cards)
   return {
     ok: true,
-    cards,
+    cards: linkedCards,
     columnOrder: parsed.columnOrder,
     unassignedCount,
+    droppedBlockerCount,
   }
+}
+
+function repairBlockers(cards: Card[]): { cards: Card[]; droppedBlockerCount: number } {
+  const ids = new Set(cards.map((card) => card.id))
+  let dropped = 0
+  const linked = cards.map((card) => ({ ...card, blockedBy: [] as string[] }))
+  const byId = new Map(linked.map((card) => [card.id, card]))
+  for (const card of cards) {
+    const target = byId.get(card.id)!
+    for (const blockerId of new Set(card.blockedBy)) {
+      if (!ids.has(blockerId) || blockerLinkReason(linked, card.id, blockerId)) {
+        dropped += 1
+        continue
+      }
+      target.blockedBy.push(blockerId)
+    }
+  }
+  return { cards: linked, droppedBlockerCount: dropped }
 }
 
 function parseCard(
@@ -183,6 +205,12 @@ function parseCard(
   }
   if (typeof value.blocked !== 'boolean') return fail('has an invalid blocked value')
   if (typeof value.blockedReason !== 'string') return fail('has an invalid blocked reason')
+  if (
+    value.blockedBy !== undefined &&
+    (!Array.isArray(value.blockedBy) || !value.blockedBy.every((id) => typeof id === 'string'))
+  ) {
+    return fail('has an invalid blocked-by list')
+  }
   if (!Array.isArray(value.comments)) return fail('has invalid comments')
   for (let commentIndex = 0; commentIndex < value.comments.length; commentIndex += 1) {
     const comment = value.comments[commentIndex]
@@ -239,6 +267,7 @@ function parseCard(
       dueDate: value.dueDate,
       blocked: value.blocked,
       blockedReason: value.blockedReason,
+      blockedBy: (value.blockedBy as string[] | undefined) ?? [],
       comments: value.comments as Card['comments'],
       checklist: value.checklist as Card['checklist'],
       requestId:

@@ -2,11 +2,13 @@ import { ArrowUpRight, Trash, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { COLUMNS, type Card, type CardType, type ChecklistItem, type ColumnId, type Priority } from '../domain/types'
 import { wipBlockReason } from '../domain/wip'
+import { dependencyBlockReason, openBlockers } from '../domain/dependencies'
 import { btnDanger, btnPrimary, btnSecondary, inputCls, PRIORITY_META, relativeTime, TYPE_META } from '../lib/meta'
 import { normalizeLabels } from '../lib/filters'
 import { useToastStore } from '../lib/toast'
 import { useUiStore } from '../lib/ui-store'
 import { useAppStore } from '../store/useAppStore'
+import { BlockerPicker } from './BlockerPicker'
 import { ChecklistEditor } from './ChecklistEditor'
 import { CommentThread } from './CommentThread'
 import { Drawer, Field } from './Drawer'
@@ -23,6 +25,7 @@ interface Draft {
   dueDate: string
   blocked: boolean
   blockedReason: string
+  blockedBy: string[]
 }
 
 const toDraft = (c: Partial<Card> & { column: ColumnId }): Draft => ({
@@ -37,12 +40,14 @@ const toDraft = (c: Partial<Card> & { column: ColumnId }): Draft => ({
   dueDate: c.dueDate ?? '',
   blocked: c.blocked ?? false,
   blockedReason: c.blockedReason ?? '',
+  blockedBy: c.blockedBy ?? [],
 })
 
 export function CardDrawer() {
   const state = useUiStore((s) => s.cardDrawer)
   const close = useUiStore((s) => s.closeCard)
   const openRequest = useUiStore((s) => s.openRequest)
+  const openCard = useUiStore((s) => s.openCard)
   const cards = useAppStore((s) => s.cards)
   const members = useAppStore((s) => s.members)
   const requests = useAppStore((s) => s.requests)
@@ -115,6 +120,9 @@ export function CardDrawer() {
   const doingFull = wipLimit > 0 && doingCount >= wipLimit
   const blockReason = wipBlockReason({ cards, settings }, card?.id ?? null)
   const doingOptionDisabled = doingFull && card?.column !== 'doing'
+  const doneBlockers = card?.column === 'done' ? [] : openBlockers(cards, draft.blockedBy)
+  const doneBlockReason = card?.column === 'done' ? null : dependencyBlockReason(cards, draft.blockedBy)
+  const blocks = card ? cards.filter((item) => item.blockedBy.includes(card.id)) : []
 
   const save = () => {
     if (!draft.title.trim()) return
@@ -130,6 +138,7 @@ export function CardDrawer() {
       dueDate: draft.dueDate || null,
       blocked: draft.blocked,
       blockedReason: draft.blocked ? draft.blockedReason : '',
+      blockedBy: draft.blockedBy,
     }
     const result = card
       ? updateCard(card.id, patch)
@@ -171,6 +180,10 @@ export function CardDrawer() {
     const result = updateChecklistItem(card.id, itemId, patch)
     if (!result.ok) {
       showToast({ message: result.reason, variant: 'error' })
+      return
+    }
+    if (!result.autoMoved && result.reason) {
+      showToast({ message: `Checklist complete, but not moved to Done. ${result.reason}`, variant: 'error' })
       return
     }
     if (result.autoMoved) {
@@ -283,11 +296,16 @@ export function CardDrawer() {
                 <option
                   key={c.id}
                   value={c.id}
-                  disabled={c.id === 'doing' && doingOptionDisabled}
+                  disabled={
+                    (c.id === 'doing' && doingOptionDisabled) ||
+                    (c.id === 'done' && doneBlockers.length > 0)
+                  }
                 >
                   {c.id === 'doing' && doingOptionDisabled
                     ? `Doing (full, ${doingCount}/${wipLimit})`
-                    : c.title}
+                    : c.id === 'done' && doneBlockers.length > 0
+                      ? `Done (blocked by '${doneBlockers[0].title}'${doneBlockers.length > 1 ? ` +${doneBlockers.length - 1}` : ''})`
+                      : c.title}
                 </option>
               ))}
             </select>
@@ -295,6 +313,9 @@ export function CardDrawer() {
               <span className="mt-1 block text-xs text-rose-600">
                 Doing is full ({doingCount}/{wipLimit}). Move a card out of Doing to enable this status.
               </span>
+            )}
+            {doneBlockReason && (
+              <span className="mt-1 block text-xs text-rose-600">{doneBlockReason}</span>
             )}
           </Field>
           <Field label="Type">
@@ -398,6 +419,37 @@ export function CardDrawer() {
             <input className={`${inputCls} mt-2`} value={draft.blockedReason} onChange={(e) => set('blockedReason', e.target.value)} placeholder="What is blocking this? Who can unblock it?" />
           )}
         </div>
+        <div>
+          <span className="mb-1.5 block text-xs font-medium text-slate-600">Blocked by</span>
+          <BlockerPicker
+            cardId={card?.id ?? null}
+            cards={cards}
+            value={draft.blockedBy}
+            onChange={(blockedBy) => set('blockedBy', blockedBy)}
+            onRefuse={(reason) => showToast({ message: reason, variant: 'error' })}
+          />
+          <span className="mt-1 block text-xs text-slate-400">
+            This card can't move to Done until every blocker is Done.
+          </span>
+        </div>
+        {blocks.length > 0 && (
+          <div>
+            <span className="mb-1.5 block text-xs font-medium text-slate-600">Blocks</span>
+            <ul className="flex flex-wrap gap-1.5">
+              {blocks.map((item) => (
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    onClick={() => openCard(item.id)}
+                    className="max-w-full truncate rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-700 hover:bg-indigo-50 hover:text-indigo-700"
+                  >
+                    {item.title}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <button type="submit" hidden />
       </form>
 

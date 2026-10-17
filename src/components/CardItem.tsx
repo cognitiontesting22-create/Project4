@@ -15,9 +15,10 @@ interface Props {
   onCardKeyDown?: (event: React.KeyboardEvent<HTMLDivElement>) => void
   overlay?: boolean
   query?: string
+  blockers?: Pick<Card, 'id' | 'title'>[]
 }
 
-export function CardView({ card, assignee, onOpen, onLabelFilter, overlay, query = '' }: Props) {
+export function CardView({ card, assignee, onOpen, onLabelFilter, overlay, query = '', blockers = [] }: Props) {
   const type = TYPE_META[card.type]
   const TypeIcon = type.icon
   const due = card.column === 'done' ? null : dueState(card.dueDate)
@@ -41,8 +42,13 @@ export function CardView({ card, assignee, onOpen, onLabelFilter, overlay, query
           <span className={clsx('h-1.5 w-1.5 rounded-full', PRIORITY_META[card.priority].dot)} />
           {PRIORITY_META[card.priority].label}
         </span>
-        {card.blocked && (
-          <span title={card.blockedReason || 'Blocked'} className="ml-auto inline-flex items-center gap-1 rounded-md bg-rose-50 px-1.5 py-0.5 text-[11px] font-semibold text-rose-700">
+        {(card.blocked || blockers.length > 0) && (
+          <span
+            title={[
+              blockers.length ? `Blocked by ${blockers.map((blocker) => `'${blocker.title}'`).join(', ')}` : '',
+              card.blocked ? card.blockedReason : '',
+            ].filter(Boolean).join('\n') || 'Blocked'}
+            className="ml-auto inline-flex items-center gap-1 rounded-md bg-rose-50 px-1.5 py-0.5 text-[11px] font-semibold text-rose-700">
             <Ban className="h-3 w-3" />
             Blocked
           </span>
