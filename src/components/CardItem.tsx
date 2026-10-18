@@ -1,8 +1,9 @@
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import clsx from 'clsx'
-import { Ban, Building, Calendar, Check, Link2, MessageSquare } from 'lucide-react'
+import { Ban, Building, Calendar, Check, Clock, Link2, MessageSquare } from 'lucide-react'
 import type { Card, Member } from '../domain/types'
+import { formatDays } from '../domain/history'
 import { descriptionSnippet, highlight } from '../lib/highlight'
 import { dueState, formatDue, PRIORITY_META, TYPE_META } from '../lib/meta'
 import { Avatar } from './Avatar'
@@ -16,12 +17,14 @@ interface Props {
   overlay?: boolean
   query?: string
   blockers?: Pick<Card, 'id' | 'title'>[]
+  staleDays?: number | null
 }
 
-export function CardView({ card, assignee, onOpen, onLabelFilter, overlay, query = '', blockers = [] }: Props) {
+export function CardView({ card, assignee, onOpen, onLabelFilter, overlay, query = '', blockers = [], staleDays }: Props) {
   const type = TYPE_META[card.type]
   const TypeIcon = type.icon
   const due = card.column === 'done' ? null : dueState(card.dueDate)
+  const isBlocked = card.blocked || blockers.length > 0
   return (
     <div
       onClick={onOpen}
@@ -42,15 +45,29 @@ export function CardView({ card, assignee, onOpen, onLabelFilter, overlay, query
           <span className={clsx('h-1.5 w-1.5 rounded-full', PRIORITY_META[card.priority].dot)} />
           {PRIORITY_META[card.priority].label}
         </span>
-        {(card.blocked || blockers.length > 0) && (
-          <span
-            title={[
-              blockers.length ? `Blocked by ${blockers.map((blocker) => `'${blocker.title}'`).join(', ')}` : '',
-              card.blocked ? card.blockedReason : '',
-            ].filter(Boolean).join('\n') || 'Blocked'}
-            className="ml-auto inline-flex items-center gap-1 rounded-md bg-rose-50 px-1.5 py-0.5 text-[11px] font-semibold text-rose-700">
-            <Ban className="h-3 w-3" />
-            Blocked
+        {(isBlocked || typeof staleDays === 'number') && (
+          <span className="ml-auto flex gap-1">
+            {isBlocked && (
+              <span
+                title={[
+                  blockers.length ? `Blocked by ${blockers.map((blocker) => `'${blocker.title}'`).join(', ')}` : '',
+                  card.blocked ? card.blockedReason : '',
+                ].filter(Boolean).join('\n') || 'Blocked'}
+                className="inline-flex items-center gap-1 rounded-md bg-rose-50 px-1.5 py-0.5 text-[11px] font-semibold text-rose-700"
+              >
+                <Ban className="h-3 w-3" />
+                Blocked
+              </span>
+            )}
+            {typeof staleDays === 'number' && (
+              <span
+                title={`In Doing for ${formatDays(staleDays)}`}
+                className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-1.5 py-0.5 text-[11px] font-semibold text-amber-700"
+              >
+                <Clock className="h-3 w-3" />
+                Stale
+              </span>
+            )}
           </span>
         )}
       </div>

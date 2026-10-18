@@ -977,7 +977,7 @@ export const useAppStore = create<AppStore>()(
           return { ok: false, reason: 'Invalid JSON.' }
         }
         const data = migrateWorkspaceData(parsed)
-        if (!data) return { ok: false, reason: 'Import must be Relay data version 1, 2, 3, 4 or 5.' }
+        if (!data) return { ok: false, reason: 'Import must be Relay data version 1, 2, 3, 4, 5 or 6.' }
         set((state) => ({
           ...data,
           ...recordHistory(state, 'Import data'),
@@ -1015,11 +1015,11 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'relay:data',
-      version: 5,
+      version: 6,
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => toAppData(state),
       migrate: (persistedState, version) =>
-        version < 5
+        version < 6
           ? migrateWorkspaceData(persistedState) ?? createSeedData()
           : (persistedState as AppData),
       merge: (persistedState, currentState) => {
@@ -1038,6 +1038,10 @@ export const useAppStore = create<AppStore>()(
                   oldSettings.doingWipLimit ??
                   wipLimitDoing ??
                   currentState.settings.doingWipLimit,
+                archiveAfterDays:
+                  oldSettings.archiveAfterDays ?? currentState.settings.archiveAfterDays,
+                staleAfterDays:
+                  oldSettings.staleAfterDays ?? currentState.settings.staleAfterDays,
               }
             : currentState.settings,
           past: currentState.past,
@@ -1248,7 +1252,7 @@ function columnTitle(column: ColumnId): string {
 }
 
 type LegacyAppData = Omit<AppData, 'version' | 'cards' | 'settings'> & {
-  version: 1 | 2 | 3 | 4 | 5
+  version: 1 | 2 | 3 | 4 | 5 | 6
   cards: Array<
     Omit<Card, 'checklist' | 'blockedBy' | 'history' | 'archivedAt'> & {
       checklist?: ChecklistItem[]
@@ -1257,7 +1261,10 @@ type LegacyAppData = Omit<AppData, 'version' | 'cards' | 'settings'> & {
       archivedAt?: unknown
     }
   >
-  settings: Omit<Settings, 'archiveAfterDays'> & { archiveAfterDays?: unknown }
+  settings: Omit<Settings, 'archiveAfterDays' | 'staleAfterDays'> & {
+    archiveAfterDays?: unknown
+    staleAfterDays?: unknown
+  }
 }
 
 function migrateWorkspaceData(value: unknown): AppData | null {
@@ -1266,7 +1273,7 @@ function migrateWorkspaceData(value: unknown): AppData | null {
   const ids = new Set(data.cards.map((card) => card.id))
   return {
     ...data,
-    version: 5,
+    version: 6,
     settings: {
       ...data.settings,
       archiveAfterDays:
@@ -1276,6 +1283,13 @@ function migrateWorkspaceData(value: unknown): AppData | null {
         data.settings.archiveAfterDays <= 365
           ? data.settings.archiveAfterDays
           : 14,
+      staleAfterDays:
+        typeof data.settings.staleAfterDays === 'number' &&
+        Number.isInteger(data.settings.staleAfterDays) &&
+        data.settings.staleAfterDays >= 1 &&
+        data.settings.staleAfterDays <= 60
+          ? data.settings.staleAfterDays
+          : 5,
     },
     cards: data.cards.map((card) => ({
       ...card,
@@ -1299,7 +1313,7 @@ function isAppData(value: unknown): value is AppData | LegacyAppData {
   if (typeof value !== 'object' || value === null) return false
   const data = value as Record<string, unknown>
   return (
-    (data.version === 1 || data.version === 2 || data.version === 3 || data.version === 4 || data.version === 5) &&
+    (data.version === 1 || data.version === 2 || data.version === 3 || data.version === 4 || data.version === 5 || data.version === 6) &&
     Array.isArray(data.members) &&
     Array.isArray(data.cards) &&
     Array.isArray(data.requests) &&

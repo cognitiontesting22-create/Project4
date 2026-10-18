@@ -117,13 +117,14 @@ export interface ScoringWeights {
 export interface Settings {
   doingWipLimit: number // 0 = no limit
   archiveAfterDays: number
+  staleAfterDays: number
   voteBudget: number // points per member across active (open|planned) requests
   maxVotesPerRequest: number
   weights: ScoringWeights
 }
 
 export interface AppData {
-  version: 5
+  version: 6
   members: Member[]
   currentUserId: string
   cards: Card[]

@@ -453,7 +453,7 @@ const activity: Activity[] = [
 
 export function createSeedData(): AppData {
   return {
-    version: 5,
+    version: 6,
     members,
     currentUserId: 'elena',
     cards,
@@ -468,6 +468,7 @@ export function createSeedData(): AppData {
     settings: {
       doingWipLimit: 3,
       archiveAfterDays: 14,
+      staleAfterDays: 5,
       voteBudget: 10,
       maxVotesPerRequest: 5,
       weights: { rice: 0.5, votes: 0.3, revenue: 0.2 },

@@ -87,6 +87,14 @@ export function SettingsView() {
 
         <Section title="Flow" description="Doing blocks new cards once it reaches this many. Set 0 to turn off." locked={!isLead}>
           <NumberField label="WIP limit for Doing" value={settings.doingWipLimit} min={0} max={50} disabled={!isLead} onChange={(v) => updateSettings({ doingWipLimit: v })} />
+          <NumberField
+            label="Stale after (days in Doing)"
+            value={settings.staleAfterDays}
+            min={1}
+            max={60}
+            disabled={!isLead}
+            onChange={(v) => updateSettings({ staleAfterDays: v })}
+          />
         </Section>
 
         <Section title="Archive" description="Archived cards leave the board. Leads set the age; anyone can run it.">

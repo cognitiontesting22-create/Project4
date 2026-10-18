@@ -212,9 +212,13 @@ describe('useAppStore', () => {
       .toBe('check-105-1')
   })
 
-  it('migrates v1 workspace imports and persisted cards to version 5', async () => {
+  it('migrates v1 workspace imports and persisted cards to version 6', async () => {
     const current = createSeedData()
-    const { archiveAfterDays: _archiveAfterDays, ...settings } = current.settings
+    const {
+      archiveAfterDays: _archiveAfterDays,
+      staleAfterDays: _staleAfterDays,
+      ...settings
+    } = current.settings
     const legacy = {
       ...current,
       version: 1,
@@ -230,20 +234,25 @@ describe('useAppStore', () => {
       ),
     }
     expect(useAppStore.getState().importData(JSON.stringify(legacy))).toEqual({ ok: true })
-    expect(useAppStore.getState().version).toBe(5)
+    expect(useAppStore.getState().version).toBe(6)
     expect(useAppStore.getState().settings.archiveAfterDays).toBe(14)
+    expect(useAppStore.getState().settings.staleAfterDays).toBe(5)
     expect(useAppStore.getState().cards.every((card) => Array.isArray(card.checklist))).toBe(true)
     expect(useAppStore.getState().cards.every((card) => card.blockedBy.length === 0)).toBe(true)
 
     localStorage.setItem('relay:data', JSON.stringify({ state: legacy, version: 1 }))
     await useAppStore.persist.rehydrate()
-    expect(useAppStore.getState().version).toBe(5)
+    expect(useAppStore.getState().version).toBe(6)
     expect(useAppStore.getState().cards.every((card) => Array.isArray(card.checklist))).toBe(true)
   })
 
-  it('migrates v2 data to version 5 with empty blockers and drops unknown blocker ids', async () => {
+  it('migrates v2 data to version 6 with empty blockers and drops unknown blocker ids', async () => {
     const current = createSeedData()
-    const { archiveAfterDays: _archiveAfterDays, ...settings } = current.settings
+    const {
+      archiveAfterDays: _archiveAfterDays,
+      staleAfterDays: _staleAfterDays,
+      ...settings
+    } = current.settings
     const v2 = {
       ...current,
       version: 2,
@@ -258,7 +267,7 @@ describe('useAppStore', () => {
     localStorage.setItem('relay:data', JSON.stringify({ state: v2, version: 2 }))
     await useAppStore.persist.rehydrate()
     const cards = useAppStore.getState().cards
-    expect(useAppStore.getState().version).toBe(5)
+    expect(useAppStore.getState().version).toBe(6)
     expect(cards.find((card) => card.id === 'card-101')?.blockedBy).toEqual(['card-105'])
     expect(cards.filter((card) => card.id !== 'card-101').every((card) => card.blockedBy.length === 0))
       .toBe(true)
@@ -640,7 +649,11 @@ describe('card history', () => {
 
   it('migrates version 3 imports and persisted data without card history', async () => {
     const current = createSeedData()
-    const { archiveAfterDays: _archiveAfterDays, ...settings } = current.settings
+    const {
+      archiveAfterDays: _archiveAfterDays,
+      staleAfterDays: _staleAfterDays,
+      ...settings
+    } = current.settings
     const v3 = {
       ...current,
       version: 3,
@@ -648,7 +661,8 @@ describe('card history', () => {
       cards: current.cards.map(({ history: _history, archivedAt: _archivedAt, ...card }) => card),
     }
     expect(useAppStore.getState().importData(JSON.stringify(v3))).toEqual({ ok: true })
-    expect(useAppStore.getState().version).toBe(5)
+    expect(useAppStore.getState().version).toBe(6)
+    expect(useAppStore.getState().settings.staleAfterDays).toBe(5)
     expect(useAppStore.getState().settings.archiveAfterDays).toBe(14)
     expect(useAppStore.getState().cards.every((card) => card.archivedAt === null)).toBe(true)
     expect(useAppStore.getState().cards.every((card) =>
@@ -659,7 +673,7 @@ describe('card history', () => {
 
     localStorage.setItem('relay:data', JSON.stringify({ state: v3, version: 3 }))
     await useAppStore.persist.rehydrate()
-    expect(useAppStore.getState().version).toBe(5)
+    expect(useAppStore.getState().version).toBe(6)
     expect(useAppStore.getState().cards.every((card) =>
       card.history.length === 1 &&
       card.history[0].column === card.column &&
@@ -667,9 +681,13 @@ describe('card history', () => {
     )).toBe(true)
   })
 
-  it('migrates version 4 data to version 5 with safe archive defaults', async () => {
+  it('migrates version 4 data to version 6 with safe archive defaults', async () => {
     const current = createSeedData()
-    const { archiveAfterDays: _archiveAfterDays, ...settings } = current.settings
+    const {
+      archiveAfterDays: _archiveAfterDays,
+      staleAfterDays: _staleAfterDays,
+      ...settings
+    } = current.settings
     const v4 = {
       ...current,
       version: 4,
@@ -678,21 +696,28 @@ describe('card history', () => {
     }
 
     expect(useAppStore.getState().importData(JSON.stringify(v4))).toEqual({ ok: true })
-    expect(useAppStore.getState().version).toBe(5)
+    expect(useAppStore.getState().version).toBe(6)
     expect(useAppStore.getState().settings.archiveAfterDays).toBe(14)
+    expect(useAppStore.getState().settings.staleAfterDays).toBe(5)
     expect(useAppStore.getState().cards.every((card) => card.archivedAt === null)).toBe(true)
 
     localStorage.setItem('relay:data', JSON.stringify({ state: v4, version: 4 }))
     await useAppStore.persist.rehydrate()
-    expect(useAppStore.getState().version).toBe(5)
+    expect(useAppStore.getState().version).toBe(6)
     expect(useAppStore.getState().settings.archiveAfterDays).toBe(14)
+    expect(useAppStore.getState().settings.staleAfterDays).toBe(5)
     expect(useAppStore.getState().cards.every((card) => card.archivedAt === null)).toBe(true)
   })
 
   it('defaults out-of-range archive ages during migration', () => {
     const data = { ...createSeedData(), version: 4 }
     const legacyCards = data.cards.map(({ archivedAt: _archivedAt, ...card }) => card)
-    const legacy = { ...data, cards: legacyCards }
+    const {
+      archiveAfterDays: _archiveAfterDays,
+      staleAfterDays: _staleAfterDays,
+      ...settings
+    } = data.settings
+    const legacy = { ...data, settings, cards: legacyCards }
 
     expect(useAppStore.getState().importData(JSON.stringify({
       ...legacy,
@@ -705,6 +730,55 @@ describe('card history', () => {
       settings: { ...legacy.settings, archiveAfterDays: 366 },
     }))).toEqual({ ok: true })
     expect(useAppStore.getState().settings.archiveAfterDays).toBe(14)
+  })
+
+  it('migrates v5 data without stale age to v6 and validates stale age values', async () => {
+    const current = createSeedData()
+    const { staleAfterDays: _staleAfterDays, ...settings } = current.settings
+    const v5 = { ...current, version: 5, settings }
+
+    expect(useAppStore.getState().importData(JSON.stringify(v5))).toEqual({ ok: true })
+    expect(useAppStore.getState().version).toBe(6)
+    expect(useAppStore.getState().settings.staleAfterDays).toBe(5)
+
+    localStorage.setItem('relay:data', JSON.stringify({ state: v5, version: 5 }))
+    await useAppStore.persist.rehydrate()
+    expect(useAppStore.getState().version).toBe(6)
+    expect(useAppStore.getState().settings.staleAfterDays).toBe(5)
+
+    for (const staleAfterDays of [0, 61, 2.5, '7']) {
+      expect(useAppStore.getState().importData(JSON.stringify({
+        ...v5,
+        settings: { ...settings, staleAfterDays },
+      }))).toEqual({ ok: true })
+      expect(useAppStore.getState().settings.staleAfterDays).toBe(5)
+    }
+
+    expect(useAppStore.getState().importData(JSON.stringify({
+      ...v5,
+      settings: { ...settings, staleAfterDays: 10 },
+    }))).toEqual({ ok: true })
+    expect(useAppStore.getState().settings.staleAfterDays).toBe(10)
+    expect(useAppStore.getState().importData('{}')).toEqual({
+      ok: false,
+      reason: 'Import must be Relay data version 1, 2, 3, 4, 5 or 6.',
+    })
+  })
+
+  it('fills missing archive and stale settings when merging v6 persisted data', async () => {
+    const current = createSeedData()
+    const {
+      archiveAfterDays: _archiveAfterDays,
+      staleAfterDays: _staleAfterDays,
+      ...settings
+    } = current.settings
+    const persisted = { ...current, settings }
+    localStorage.setItem('relay:data', JSON.stringify({ state: persisted, version: 6 }))
+
+    await useAppStore.persist.rehydrate()
+
+    expect(useAppStore.getState().settings.archiveAfterDays).toBe(14)
+    expect(useAppStore.getState().settings.staleAfterDays).toBe(5)
   })
 
   it('preserves only string archivedAt values during migration', () => {
