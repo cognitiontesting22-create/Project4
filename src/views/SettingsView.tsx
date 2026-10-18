@@ -5,6 +5,7 @@ import { archiveToastMessage } from '../domain/archive'
 import type { ScoringWeights } from '../domain/types'
 import { btnDanger, btnSecondary, inputCls, SCORE_COLORS } from '../lib/meta'
 import { useToastStore } from '../lib/toast'
+import { undoWithToast } from '../lib/undo'
 import { useAppStore } from '../store/useAppStore'
 
 function downloadJson(json: string) {
@@ -105,6 +106,7 @@ export function SettingsView() {
                 showToast({
                   message: archiveToastMessage(count, settings.archiveAfterDays),
                   variant: 'info',
+                  ...(count > 0 ? { action: { label: 'Undo', onClick: undoWithToast } } : {}),
                 })
               }}
             >

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseBoardFile } from '../domain/boardFile'
-import { cycleTimeDays } from '../domain/history'
+import { cycleTimeDays, reachedDoneAt } from '../domain/history'
 import type { Card } from '../domain/types'
 import { createSeedData } from './seed'
 
@@ -840,7 +840,68 @@ describe('card archiving', () => {
     expect(useAppStore.getState().activity).toBe(activityBefore)
     expect(useAppStore.getState().requests).toBe(requestsBefore)
     expect(useAppStore.getState().past).toHaveLength(1)
-    expect(useAppStore.getState().past.at(-1)?.label).toBe('Archive old Done cards')
+    expect(useAppStore.getState().past.at(-1)?.label).toBe('Archive 1 Done cards')
+  })
+
+  it('undoes and redoes a two-card bulk archive at the original Done positions', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const now = '2026-10-20T12:00:00.000Z'
+    vi.setSystemTime(new Date(now))
+    const current = useAppStore.getState()
+    const doneIds = [...current.columnOrder.done]
+    const extraTodoId = current.columnOrder.todo[0]
+    if (doneIds.length < 2 || !extraTodoId) {
+      throw new Error('Expected two Done cards and a To do card')
+    }
+    if (doneIds.length < 3) doneIds.push(extraTodoId)
+    const [first, middle, last] = doneIds.slice(0, 3)
+    if (!first || !middle || !last) throw new Error('Expected at least three Done cards')
+    const initialDoneIds = [first, middle, last]
+    const archivedIds = new Set([first, last])
+    const oldDoneHistory = [
+      { column: 'todo' as const, enteredAt: '2026-09-01T00:00:00.000Z' },
+      { column: 'doing' as const, enteredAt: '2026-09-02T00:00:00.000Z' },
+      { column: 'done' as const, enteredAt: '2026-09-03T00:00:00.000Z' },
+    ]
+    useAppStore.setState({
+      cards: current.cards.map((card) => {
+        if (archivedIds.has(card.id)) {
+          return { ...card, column: 'done', archivedAt: null, history: oldDoneHistory }
+        }
+        if (card.column === 'done') {
+          return {
+            ...card,
+            history: [
+              ...card.history.slice(0, -1),
+              { column: 'done' as const, enteredAt: now },
+            ],
+          }
+        }
+        return card
+      }),
+      columnOrder: {
+        ...current.columnOrder,
+        todo: current.columnOrder.todo.filter((id) => !archivedIds.has(id)),
+        done: initialDoneIds,
+      },
+    })
+
+    expect(useAppStore.getState().archiveOldDoneCards()).toBe(2)
+    expect(useAppStore.getState().past.at(-1)?.label).toBe('Archive 2 Done cards')
+    expect(useAppStore.getState().columnOrder.done).toEqual([middle])
+    expect(cardById(first).archivedAt).toBe(now)
+    expect(cardById(last).archivedAt).toBe(now)
+
+    expect(useAppStore.getState().undo()).toBe('Archive 2 Done cards')
+    expect(useAppStore.getState().columnOrder.done).toEqual(initialDoneIds)
+    expect(cardById(first).archivedAt).toBeNull()
+    expect(cardById(last).archivedAt).toBeNull()
+    vi.setSystemTime(new Date('2026-10-21T12:00:00.000Z'))
+
+    expect(useAppStore.getState().redo()).toBe('Archive 2 Done cards')
+    expect(useAppStore.getState().columnOrder.done).toEqual([middle])
+    expect(cardById(first).archivedAt).toBe(now)
+    expect(cardById(last).archivedAt).toBe(now)
   })
 
   it('returns zero without setting state when no cards qualify', () => {
@@ -873,8 +934,31 @@ describe('card archiving', () => {
     const now = '2026-10-20T12:00:00.000Z'
     vi.setSystemTime(new Date(now))
     const card = cardById('card-109')
+    const current = useAppStore.getState()
+    const otherIds = current.columnOrder.done.filter((id) => id !== card.id)
+    const first = current.cards.find(
+      (item) => item.column === 'todo' && !current.columnOrder.done.includes(item.id),
+    )
+    const last = otherIds[0]
+    if (!first || !last) throw new Error('Expected a To do card and another Done card')
+    const originalOrder = [first.id, card.id, last]
+    useAppStore.setState({
+      cards: current.cards.map((item) =>
+        item.id === first.id
+          ? {
+              ...item,
+              column: 'done',
+              history: [...item.history, { column: 'done', enteredAt: now }],
+            }
+          : item,
+      ),
+      columnOrder: {
+        ...current.columnOrder,
+        todo: current.columnOrder.todo.filter((id) => id !== first.id),
+        done: originalOrder,
+      },
+    })
     const history = card.history
-    const originalOrder = useAppStore.getState().columnOrder.done
     const activity = useAppStore.getState().activity
     const requests = useAppStore.getState().requests
 
@@ -885,14 +969,77 @@ describe('card archiving', () => {
       column: 'done',
       history,
     })
-    expect(useAppStore.getState().columnOrder.done).not.toContain(card.id)
+    expect(useAppStore.getState().columnOrder.done).toEqual([first.id, last])
     expect(useAppStore.getState().activity).toBe(activity)
     expect(useAppStore.getState().requests).toBe(requests)
     expect(useAppStore.getState().undo()).toBe(`Archive '${card.title}'`)
     expect(cardById(card.id).archivedAt).toBeNull()
     expect(useAppStore.getState().columnOrder.done).toEqual(originalOrder)
+    vi.setSystemTime(new Date('2026-10-21T12:00:00.000Z'))
     expect(useAppStore.getState().redo()).toBe(`Archive '${card.title}'`)
     expect(cardById(card.id).archivedAt).toBe(now)
+    expect(useAppStore.getState().columnOrder.done).toEqual([first.id, last])
+  })
+
+  it('restores archived cards at the front and undo keeps the original archive timestamp', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const originalArchivedAt = '2026-10-20T12:00:00.000Z'
+    vi.setSystemTime(new Date(originalArchivedAt))
+    const card = cardById('card-109')
+    const history = card.history
+    const doneAt = reachedDoneAt(card)
+    const cycleTime = cycleTimeDays(card)
+    expect(useAppStore.getState().archiveCard(card.id)).toEqual({ ok: true })
+    expect(cardById(card.id).archivedAt).toBe(originalArchivedAt)
+
+    const restoreTime = '2026-10-21T12:00:00.000Z'
+    vi.setSystemTime(new Date(restoreTime))
+    expect(useAppStore.getState().restoreCard(card.id)).toEqual({ ok: true })
+    expect(useAppStore.getState().past.at(-1)?.label).toBe(`Restore '${card.title}'`)
+    expect(useAppStore.getState().columnOrder.done[0]).toBe(card.id)
+    expect(cardById(card.id)).toMatchObject({
+      archivedAt: null,
+      updatedAt: restoreTime,
+      history,
+    })
+    expect(reachedDoneAt(cardById(card.id))).toBe(doneAt)
+    expect(cycleTimeDays(cardById(card.id))).toBe(cycleTime)
+
+    vi.setSystemTime(new Date('2026-10-22T12:00:00.000Z'))
+    expect(useAppStore.getState().undo()).toBe(`Restore '${card.title}'`)
+    expect(cardById(card.id).archivedAt).toBe(originalArchivedAt)
+    expect(useAppStore.getState().columnOrder.done).not.toContain(card.id)
+    expect(useAppStore.getState().redo()).toBe(`Restore '${card.title}'`)
+    expect(cardById(card.id).archivedAt).toBeNull()
+    expect(useAppStore.getState().columnOrder.done[0]).toBe(card.id)
+    expect(cardById(card.id).updatedAt).toBe(restoreTime)
+  })
+
+  it('refuses to restore an unarchived card without changing state or undo history', () => {
+    const before = useAppStore.getState()
+    const beforeData = useAppStore.getState().exportData()
+    expect(useAppStore.getState().restoreCard('missing-card')).toEqual({ ok: true })
+    expect(useAppStore.getState().restoreCard('card-109')).toEqual({
+      ok: false,
+      reason: 'This card is not archived.',
+    })
+    expect(useAppStore.getState().exportData()).toBe(beforeData)
+    expect(useAppStore.getState().cards).toBe(before.cards)
+    expect(useAppStore.getState().columnOrder).toBe(before.columnOrder)
+    expect(useAppStore.getState().past.length).toBe(before.past.length)
+  })
+
+  it('keeps the undo history cap at 100 after archive and restore actions', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-20T12:00:00.000Z'))
+    const card = cardById('card-109')
+    expect(useAppStore.getState().archiveCard(card.id)).toEqual({ ok: true })
+    expect(useAppStore.getState().restoreCard(card.id)).toEqual({ ok: true })
+    for (let index = 0; index < 101; index += 1) {
+      expect(useAppStore.getState().updateCard(card.id, { title: `Undo cap ${index}` }))
+        .toEqual({ ok: true })
+    }
+    expect(useAppStore.getState().past).toHaveLength(100)
   })
 
   it('does not mutate state or add undo entries when archive requests are refused', () => {

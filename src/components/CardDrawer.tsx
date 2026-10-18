@@ -7,6 +7,7 @@ import { dependencyBlockReason, openBlockers } from '../domain/dependencies'
 import { btnDanger, btnPrimary, btnSecondary, inputCls, PRIORITY_META, relativeTime, TYPE_META } from '../lib/meta'
 import { normalizeLabels } from '../lib/filters'
 import { useToastStore } from '../lib/toast'
+import { undoWithToast } from '../lib/undo'
 import { useUiStore } from '../lib/ui-store'
 import { useAppStore } from '../store/useAppStore'
 import { BlockerPicker } from './BlockerPicker'
@@ -265,7 +266,11 @@ export function CardDrawer() {
                       const result = archiveCard(card.id)
                       if (result.ok) {
                         close()
-                        showToast({ message: `Archived '${card.title}'`, variant: 'info' })
+                        showToast({
+                          message: `Archived '${card.title}'`,
+                          variant: 'info',
+                          action: { label: 'Undo', onClick: undoWithToast },
+                        })
                       } else {
                         showToast({ message: result.reason, variant: 'error' })
                       }

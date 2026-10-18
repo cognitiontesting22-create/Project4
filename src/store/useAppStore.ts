@@ -55,6 +55,7 @@ interface AppActions {
   deleteCard: (id: string) => void
   moveCard: (id: string, to: ColumnId, toIndex: number) => ActionResult
   archiveCard: (id: string) => ActionResult
+  restoreCard: (id: string) => ActionResult
   archiveOldDoneCards: () => number
   addComment: (target: 'card' | 'request', id: string, body: string) => void
   addRequest: (input: Partial<FeatureRequest> & { title: string }) => string
@@ -551,6 +552,28 @@ export const useAppStore = create<AppStore>()(
         return { ok: true }
       },
 
+      restoreCard: (id) => {
+        const state = get()
+        const card = state.cards.find((item) => item.id === id)
+        if (!card) return { ok: true }
+        if (card.archivedAt === null) {
+          return { ok: false, reason: 'This card is not archived.' }
+        }
+
+        const now = new Date().toISOString()
+        set((current) => ({
+          ...recordHistory(current, `Restore '${card.title}'`),
+          cards: current.cards.map((item) =>
+            item.id === id ? { ...item, archivedAt: null, updatedAt: now } : item,
+          ),
+          columnOrder: {
+            ...current.columnOrder,
+            done: [id, ...current.columnOrder.done.filter((cardId) => cardId !== id)],
+          },
+        }))
+        return { ok: true }
+      },
+
       archiveOldDoneCards: () => {
         const state = get()
         const now = new Date()
@@ -560,7 +583,7 @@ export const useAppStore = create<AppStore>()(
         const ids = new Set(cards.map((card) => card.id))
         const archivedAt = now.toISOString()
         set((current) => ({
-          ...recordHistory(current, 'Archive old Done cards'),
+          ...recordHistory(current, `Archive ${cards.length} Done cards`),
           cards: current.cards.map((card) =>
             ids.has(card.id) ? { ...card, archivedAt, updatedAt: archivedAt } : card,
           ),

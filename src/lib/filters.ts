@@ -35,6 +35,19 @@ export function filterCards(cards: Card[], filters: BoardFilters): Card[] {
   })
 }
 
+export function archivedCards(cards: Card[], query: string): Card[] {
+  const q = query.trim().toLocaleLowerCase()
+  return cards
+    .filter(
+      (card) =>
+        card.archivedAt !== null &&
+        (!q || card.title.toLocaleLowerCase().includes(q)),
+    )
+    .sort(
+      (a, b) => Date.parse(b.archivedAt!) - Date.parse(a.archivedAt!),
+    )
+}
+
 export function normalizeLabels(list: string[]): string[] {
   const labels = new Set<string>()
   for (const value of list) {
