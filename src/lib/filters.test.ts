@@ -18,6 +18,7 @@ const card = (id: string, labels: string[]): Card => ({
   blockedReason: '',
   blockedBy: [],
   history: [{ column: 'todo', enteredAt: '' }],
+  archivedAt: null,
   comments: [],
   checklist: [],
   requestId: null,
@@ -52,6 +53,19 @@ describe('board filters', () => {
 
     expect(filterCards(cards, { ...emptyFilters, labels: ['aPi', 'INFRA'] }).map((item) => item.id))
       .toEqual(['one', 'three'])
+  })
+
+  it('excludes archived cards before empty, query, and blocked-only filters', () => {
+    const cards = [
+      { ...card('active', []), title: 'Retry live task', blocked: true },
+      { ...card('archived', []), title: 'Retry archived task', blocked: true, archivedAt: '2026-10-01T00:00:00.000Z' },
+    ]
+
+    expect(filterCards(cards, emptyFilters).map((item) => item.id)).toEqual(['active'])
+    expect(filterCards(cards, { ...emptyFilters, query: 'retry' }).map((item) => item.id))
+      .toEqual(['active'])
+    expect(filterCards(cards, { ...emptyFilters, blockedOnly: true }).map((item) => item.id))
+      .toEqual(['active'])
   })
 
   it('trims, lowercases, removes empty labels, and deduplicates while preserving order', () => {

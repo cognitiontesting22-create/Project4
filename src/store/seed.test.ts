@@ -7,6 +7,8 @@ describe('createSeedData', () => {
     const data = createSeedData()
 
     expect(data.settings.doingWipLimit).toBe(3)
+    expect(data.settings.archiveAfterDays).toBe(14)
+    expect(data.cards.every((card) => card.archivedAt === null)).toBe(true)
     expect(data.columnOrder.doing).toHaveLength(3)
   })
 

@@ -77,6 +77,57 @@ describe('board file format', () => {
     }
   })
 
+  it('round trips archived cards outside column order and backfills missing archivedAt', () => {
+    const archivedCard = seed.cards.find((card) => card.column === 'done')!
+    const cards = seed.cards.map((card) =>
+      card.id === archivedCard.id
+        ? { ...card, archivedAt: '2026-10-20T12:00:00.000Z' }
+        : card,
+    )
+    const columnOrder = {
+      ...seed.columnOrder,
+      done: seed.columnOrder.done.filter((id) => id !== archivedCard.id),
+    }
+    const result = parseBoardFile(serializeBoard({ cards, columnOrder }), context)
+
+    expect(result).toMatchObject({ ok: true, columnOrder })
+    if (result.ok) {
+      expect(result.cards).toHaveLength(seed.cards.length)
+      expect(result.cards.find((card) => card.id === archivedCard.id)?.archivedAt)
+        .toBe('2026-10-20T12:00:00.000Z')
+      expect(result.columnOrder.done).not.toContain(archivedCard.id)
+    }
+
+    const legacy = boardData()
+    delete legacy.cards[0].archivedAt
+    const backfilled = parse(legacy)
+    expect(backfilled.ok && backfilled.cards[0].archivedAt).toBeNull()
+  })
+
+  it('rejects invalid, non-Done, and listed archived cards', () => {
+    const invalid = boardData()
+    invalid.cards[0].archivedAt = 42
+    expect(parse(invalid)).toEqual({
+      ok: false,
+      reason: "Card 1 ('Harden webhook retry handling') has an invalid archivedAt",
+    })
+
+    const notDone = boardData()
+    notDone.cards[0].archivedAt = '2026-10-20T12:00:00.000Z'
+    expect(parse(notDone)).toEqual({
+      ok: false,
+      reason: "Card 1 ('Harden webhook retry handling') is archived but not in Done",
+    })
+
+    const listed = boardData()
+    const archivedCard = listed.cards.find((card) => card.column === 'done')!
+    archivedCard.archivedAt = '2026-10-20T12:00:00.000Z'
+    expect(parse(listed)).toEqual({
+      ok: false,
+      reason: `Card ${listed.cards.indexOf(archivedCard) + 1} ('${archivedCard.title}') is archived but listed in column order`,
+    })
+  })
+
   it('drops blocker links to missing cards, self links, and links that would form a cycle', () => {
     const data = boardData()
     data.cards[0].blockedBy = ['card-gone', 'card-101', 'card-105']

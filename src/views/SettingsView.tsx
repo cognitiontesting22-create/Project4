@@ -1,8 +1,10 @@
 import { Download, Lock, RotateCcw, Upload } from 'lucide-react'
 import { useRef, useState, type ReactNode } from 'react'
 import { Avatar, RoleBadge } from '../components/Avatar'
+import { archiveToastMessage } from '../domain/archive'
 import type { ScoringWeights } from '../domain/types'
 import { btnDanger, btnSecondary, inputCls, SCORE_COLORS } from '../lib/meta'
+import { useToastStore } from '../lib/toast'
 import { useAppStore } from '../store/useAppStore'
 
 function downloadJson(json: string) {
@@ -19,7 +21,8 @@ export function SettingsView() {
   const settings = useAppStore((s) => s.settings)
   const members = useAppStore((s) => s.members)
   const me = useAppStore((s) => s.members.find((m) => m.id === s.currentUserId))
-  const { updateSettings, exportData, importData, resetDemo } = useAppStore.getState()
+  const { updateSettings, archiveOldDoneCards, exportData, importData, resetDemo } = useAppStore.getState()
+  const showToast = useToastStore((s) => s.showToast)
   const isLead = me?.role === 'lead'
   const fileRef = useRef<HTMLInputElement>(null)
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
@@ -83,6 +86,31 @@ export function SettingsView() {
 
         <Section title="Flow" description="Doing blocks new cards once it reaches this many. Set 0 to turn off." locked={!isLead}>
           <NumberField label="WIP limit for Doing" value={settings.doingWipLimit} min={0} max={50} disabled={!isLead} onChange={(v) => updateSettings({ doingWipLimit: v })} />
+        </Section>
+
+        <Section title="Archive" description="Archived cards leave the board. Leads set the age; anyone can run it.">
+          <div className="flex flex-wrap items-end gap-4">
+            <NumberField
+              label="Archive Done cards older than (days)"
+              value={settings.archiveAfterDays}
+              min={1}
+              max={365}
+              disabled={!isLead}
+              onChange={(v) => updateSettings({ archiveAfterDays: v })}
+            />
+            <button
+              className={btnSecondary}
+              onClick={() => {
+                const count = archiveOldDoneCards()
+                showToast({
+                  message: archiveToastMessage(count, settings.archiveAfterDays),
+                  variant: 'info',
+                })
+              }}
+            >
+              Archive old Done cards
+            </button>
+          </div>
         </Section>
 
         <Section title="Team" description="Roles show up as badges across the board, requests and discussion.">

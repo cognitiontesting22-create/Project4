@@ -7,7 +7,7 @@ export function wipBlockReason(
   const limit = data.settings.doingWipLimit
   if (limit <= 0) return null
 
-  const doingCards = data.cards.filter((card) => card.column === 'doing')
+  const doingCards = data.cards.filter((card) => card.column === 'doing' && !card.archivedAt)
   if (cardId && doingCards.some((card) => card.id === cardId)) return null
 
   const otherDoingCount = doingCards.filter((card) => card.id !== cardId).length

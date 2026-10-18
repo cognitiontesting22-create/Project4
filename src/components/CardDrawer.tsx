@@ -1,4 +1,4 @@
-import { ArrowUpRight, Trash, X } from 'lucide-react'
+import { Archive, ArrowUpRight, Trash, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { cycleTimeDays, formatDays, timeInColumnDays } from '../domain/history'
 import { COLUMNS, type Card, type CardType, type ChecklistItem, type ColumnId, type Priority } from '../domain/types'
@@ -57,6 +57,7 @@ export function CardDrawer() {
     addCard,
     updateCard,
     deleteCard,
+    archiveCard,
     addComment,
     addChecklistItem,
     updateChecklistItem,
@@ -116,7 +117,7 @@ export function CardDrawer() {
   }
   const linkedRequest = card?.requestId ? requests.find((r) => r.id === card.requestId) : undefined
   const reporter = card ? members.find((m) => m.id === card.reporterId) : undefined
-  const doingCount = cards.filter((item) => item.column === 'doing').length
+  const doingCount = cards.filter((item) => item.column === 'doing' && !item.archivedAt).length
   const wipLimit = settings.doingWipLimit
   const doingFull = wipLimit > 0 && doingCount >= wipLimit
   const blockReason = wipBlockReason({ cards, settings }, card?.id ?? null)
@@ -256,10 +257,29 @@ export function CardDrawer() {
                 </button>
               </>
             ) : (
-              <button className={btnDanger} onClick={() => setConfirmDelete(true)}>
-                <Trash className="h-4 w-4" />
-                Delete
-              </button>
+              <>
+                {card.column === 'done' && card.archivedAt === null && (
+                  <button
+                    className={btnSecondary}
+                    onClick={() => {
+                      const result = archiveCard(card.id)
+                      if (result.ok) {
+                        close()
+                        showToast({ message: `Archived '${card.title}'`, variant: 'info' })
+                      } else {
+                        showToast({ message: result.reason, variant: 'error' })
+                      }
+                    }}
+                  >
+                    <Archive className="h-4 w-4" />
+                    Archive
+                  </button>
+                )}
+                <button className={btnDanger} onClick={() => setConfirmDelete(true)}>
+                  <Trash className="h-4 w-4" />
+                  Delete
+                </button>
+              </>
             ))}
           <div className="ml-auto flex gap-2">
             <button className={btnSecondary} onClick={close}>

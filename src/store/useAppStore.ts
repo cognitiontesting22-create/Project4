@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 import { ACTIVE_STATUSES, parseMentions, votesUsed } from '../domain/scoring'
 import { uid } from '../domain/ids'
+import { cardsToArchive } from '../domain/archive'
 import { backfillHistory, isValidHistory } from '../domain/history'
 import { normalizeLabels } from '../lib/filters'
 import { wipBlockReason } from '../domain/wip'
@@ -53,6 +54,8 @@ interface AppActions {
   updateCard: (id: string, patch: Partial<Card>) => ActionResult
   deleteCard: (id: string) => void
   moveCard: (id: string, to: ColumnId, toIndex: number) => ActionResult
+  archiveCard: (id: string) => ActionResult
+  archiveOldDoneCards: () => number
   addComment: (target: 'card' | 'request', id: string, body: string) => void
   addRequest: (input: Partial<FeatureRequest> & { title: string }) => string
   updateRequest: (id: string, patch: Partial<FeatureRequest>) => void
@@ -138,6 +141,7 @@ export const useAppStore = create<AppStore>()(
           createdAt,
           updatedAt: now,
           history: [{ column: input.column, enteredAt: createdAt }],
+          archivedAt: null,
         }
 
         set((current) => ({
@@ -162,6 +166,13 @@ export const useAppStore = create<AppStore>()(
         const state = get()
         const card = state.cards.find((item) => item.id === id)
         if (!card) return { ok: true }
+        if (
+          card.archivedAt !== null &&
+          patch.column !== undefined &&
+          patch.column !== card.column
+        ) {
+          return { ok: false, reason: 'Restore this card before moving it.' }
+        }
         let blockedBy: string[] | undefined
         if (patch.blockedBy) {
           const blockers = requestedBlockers(state.cards, patch.blockedBy, id)
@@ -179,6 +190,7 @@ export const useAppStore = create<AppStore>()(
         }
         delete normalizedPatch.id
         delete normalizedPatch.history
+        delete normalizedPatch.archivedAt
         const destination = normalizedPatch.column ?? card.column
         const reason =
           destination === 'doing' && card.column !== 'doing'
@@ -300,9 +312,11 @@ export const useAppStore = create<AppStore>()(
         const checklist = card.checklist.map((entry) =>
           entry.id === itemId ? { ...entry, text, done } : entry,
         )
-        const completes = patch.done === true && !item.done &&
+        const completes = card.archivedAt === null &&
+          patch.done === true && !item.done &&
           card.column !== 'done' && checklist.length > 0 && checklist.every((entry) => entry.done)
-        const reopens = patch.done === false && item.done &&
+        const reopens = card.archivedAt === null &&
+          patch.done === false && item.done &&
           card.column === 'done' && card.checklist.length > 0 &&
           card.checklist.every((entry) => entry.done)
         const blockedReason = reopens
@@ -488,6 +502,9 @@ export const useAppStore = create<AppStore>()(
         const state = get()
         const card = state.cards.find((item) => item.id === id)
         if (!card) return { ok: true }
+        if (card.archivedAt !== null) {
+          return { ok: false, reason: 'Restore this card before moving it.' }
+        }
         const reason =
           to === 'doing' && card.column !== 'doing'
             ? wipBlockReason(state, id)
@@ -507,6 +524,52 @@ export const useAppStore = create<AppStore>()(
           ...movement,
         }))
         return { ok: true }
+      },
+
+      archiveCard: (id) => {
+        const state = get()
+        const card = state.cards.find((item) => item.id === id)
+        if (!card) return { ok: true }
+        if (card.archivedAt !== null) {
+          return { ok: false, reason: 'This card is already archived.' }
+        }
+        if (card.column !== 'done') {
+          return { ok: false, reason: 'Only Done cards can be archived.' }
+        }
+
+        const now = new Date().toISOString()
+        set((current) => ({
+          ...recordHistory(current, `Archive '${card.title}'`),
+          cards: current.cards.map((item) =>
+            item.id === id ? { ...item, archivedAt: now, updatedAt: now } : item,
+          ),
+          columnOrder: {
+            ...current.columnOrder,
+            done: current.columnOrder.done.filter((cardId) => cardId !== id),
+          },
+        }))
+        return { ok: true }
+      },
+
+      archiveOldDoneCards: () => {
+        const state = get()
+        const now = new Date()
+        const cards = cardsToArchive(state.cards, state.settings.archiveAfterDays, now)
+        if (!cards.length) return 0
+
+        const ids = new Set(cards.map((card) => card.id))
+        const archivedAt = now.toISOString()
+        set((current) => ({
+          ...recordHistory(current, 'Archive old Done cards'),
+          cards: current.cards.map((card) =>
+            ids.has(card.id) ? { ...card, archivedAt, updatedAt: archivedAt } : card,
+          ),
+          columnOrder: {
+            ...current.columnOrder,
+            done: current.columnOrder.done.filter((id) => !ids.has(id)),
+          },
+        }))
+        return cards.length
       },
 
       addComment: (target, id, body) => {
@@ -767,6 +830,7 @@ export const useAppStore = create<AppStore>()(
           createdAt: now,
           updatedAt: now,
           history: [{ column: 'todo', enteredAt: now }],
+          archivedAt: null,
         }
 
         set((current) => ({
@@ -890,7 +954,7 @@ export const useAppStore = create<AppStore>()(
           return { ok: false, reason: 'Invalid JSON.' }
         }
         const data = migrateWorkspaceData(parsed)
-        if (!data) return { ok: false, reason: 'Import must be Relay data version 1, 2, 3 or 4.' }
+        if (!data) return { ok: false, reason: 'Import must be Relay data version 1, 2, 3, 4 or 5.' }
         set((state) => ({
           ...data,
           ...recordHistory(state, 'Import data'),
@@ -928,11 +992,11 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'relay:data',
-      version: 4,
+      version: 5,
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => toAppData(state),
       migrate: (persistedState, version) =>
-        version < 4
+        version < 5
           ? migrateWorkspaceData(persistedState) ?? createSeedData()
           : (persistedState as AppData),
       merge: (persistedState, currentState) => {
@@ -1160,15 +1224,17 @@ function columnTitle(column: ColumnId): string {
   return column === 'todo' ? 'To do' : column === 'doing' ? 'Doing' : 'Done'
 }
 
-type LegacyAppData = Omit<AppData, 'version' | 'cards'> & {
-  version: 1 | 2 | 3 | 4
+type LegacyAppData = Omit<AppData, 'version' | 'cards' | 'settings'> & {
+  version: 1 | 2 | 3 | 4 | 5
   cards: Array<
-    Omit<Card, 'checklist' | 'blockedBy' | 'history'> & {
+    Omit<Card, 'checklist' | 'blockedBy' | 'history' | 'archivedAt'> & {
       checklist?: ChecklistItem[]
       blockedBy?: unknown
       history?: unknown
+      archivedAt?: unknown
     }
   >
+  settings: Omit<Settings, 'archiveAfterDays'> & { archiveAfterDays?: unknown }
 }
 
 function migrateWorkspaceData(value: unknown): AppData | null {
@@ -1177,12 +1243,23 @@ function migrateWorkspaceData(value: unknown): AppData | null {
   const ids = new Set(data.cards.map((card) => card.id))
   return {
     ...data,
-    version: 4,
+    version: 5,
+    settings: {
+      ...data.settings,
+      archiveAfterDays:
+        typeof data.settings.archiveAfterDays === 'number' &&
+        Number.isInteger(data.settings.archiveAfterDays) &&
+        data.settings.archiveAfterDays >= 1 &&
+        data.settings.archiveAfterDays <= 365
+          ? data.settings.archiveAfterDays
+          : 14,
+    },
     cards: data.cards.map((card) => ({
       ...card,
       history: isValidHistory(card.history, card.column)
         ? card.history
         : backfillHistory(card),
+      archivedAt: typeof card.archivedAt === 'string' ? card.archivedAt : null,
       checklist: Array.isArray(card.checklist) ? card.checklist : [],
       blockedBy: normalizeBlockedBy(
         Array.isArray(card.blockedBy)
@@ -1199,7 +1276,7 @@ function isAppData(value: unknown): value is AppData | LegacyAppData {
   if (typeof value !== 'object' || value === null) return false
   const data = value as Record<string, unknown>
   return (
-    (data.version === 1 || data.version === 2 || data.version === 3 || data.version === 4) &&
+    (data.version === 1 || data.version === 2 || data.version === 3 || data.version === 4 || data.version === 5) &&
     Array.isArray(data.members) &&
     Array.isArray(data.cards) &&
     Array.isArray(data.requests) &&

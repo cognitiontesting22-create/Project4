@@ -25,7 +25,7 @@ export function BlockerPicker({ cardId, cards, value, onChange, onRefuse }: Prop
   const matches = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase()
     return cards
-      .filter((card) => card.id !== cardId && !value.includes(card.id))
+      .filter((card) => card.id !== cardId && !value.includes(card.id) && card.archivedAt === null)
       .filter((card) => !needle || card.title.toLocaleLowerCase().includes(needle))
       .slice(0, 8)
   }, [cards, cardId, value, query])

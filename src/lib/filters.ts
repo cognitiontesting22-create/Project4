@@ -15,6 +15,7 @@ export function filterCards(cards: Card[], filters: BoardFilters): Card[] {
   const labels = normalizeLabels(filters.labels)
 
   return cards.filter((card) => {
+    if (card.archivedAt !== null) return false
     if (
       query &&
       !`${card.title} ${card.description}`.toLocaleLowerCase().includes(query)

@@ -89,13 +89,14 @@ export function BoardView() {
   const [importDialog, setImportDialog] = useState<BoardImportDialogState | null>(null)
 
   const byId = useMemo(() => new Map(cards.map((card) => [card.id, card])), [cards])
+  const activeCards = useMemo(() => cards.filter((card) => !card.archivedAt), [cards])
   const memberById = useMemo(
     () => new Map(members.map((member) => [member.id, member])),
     [members],
   )
   const customers = useMemo(
-    () => [...new Set(cards.map((card) => card.customer).filter(Boolean))].sort(),
-    [cards],
+    () => [...new Set(activeCards.map((card) => card.customer).filter(Boolean))].sort(),
+    [activeCards],
   )
   const filteredCards = useMemo(() => filterCards(cards, filters), [cards, filters])
   const filteredIds = useMemo(
@@ -390,7 +391,7 @@ export function BoardView() {
           <div>
             <h1 className="text-xl font-semibold tracking-tight text-slate-900">Engineering board</h1>
             <p className="mt-1 text-sm text-slate-500">
-              {cards.length} cards · <span className="text-orange-600">{escalations} open escalations</span> ·{' '}
+              {activeCards.length} cards · <span className="text-orange-600">{escalations} open escalations</span> ·{' '}
               <span className="text-rose-600">{blockedCount} blocked</span>
             </p>
           </div>
@@ -451,12 +452,12 @@ export function BoardView() {
           setFilters={setFilters}
           members={members}
           customers={customers}
-          cards={cards}
+          cards={activeCards}
           searchRef={searchRef}
         />
         {filtered && (
           <p className="mt-3 flex items-center gap-2 text-xs text-slate-500">
-            Showing {totalVisible} of {cards.length} cards ·{' '}
+            Showing {totalVisible} of {activeCards.length} cards ·{' '}
             <button className="font-medium text-indigo-600 hover:underline" onClick={clearFilters}>
               Clear filters
             </button>

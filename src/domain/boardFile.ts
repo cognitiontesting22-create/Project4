@@ -102,13 +102,24 @@ export function parseBoardFile(
   const listed = new Map<string, { column: ColumnId; count: number }>()
   for (const column of COLUMNS) {
     for (const id of parsed.columnOrder[column]) {
+      const cardEntry = cardById.get(id)
+      if (!cardEntry) {
+        return { ok: false, reason: `Column order lists unknown card id '${id}'.` }
+      }
+      if (cardEntry.card.archivedAt !== null) {
+        return {
+          ok: false,
+          reason: cardMessage(
+            cardEntry.index + 1,
+            cardEntry.card.title,
+            'is archived but listed in column order',
+          ),
+        }
+      }
       const existing = listed.get(id)
       if (existing) {
         existing.count += 1
         continue
-      }
-      if (!cardById.has(id)) {
-        return { ok: false, reason: `Column order lists unknown card id '${id}'.` }
       }
       listed.set(id, { column, count: 1 })
     }
@@ -121,6 +132,15 @@ export function parseBoardFile(
   }
   for (const { card, index } of cardById.values()) {
     const entry = listed.get(card.id)
+    if (card.archivedAt !== null) {
+      if (entry) {
+        return {
+          ok: false,
+          reason: cardMessage(index + 1, card.title, 'is archived but listed in column order'),
+        }
+      }
+      continue
+    }
     if (!entry) {
       return {
         ok: false,
@@ -183,6 +203,17 @@ function parseCard(
   if (typeof value.description !== 'string') return fail('has an invalid description')
   if (!isOneOf(value.column, COLUMNS)) {
     return fail(`has an invalid column '${String(value.column)}'`)
+  }
+  if (
+    value.archivedAt !== undefined &&
+    value.archivedAt !== null &&
+    typeof value.archivedAt !== 'string'
+  ) {
+    return fail('has an invalid archivedAt')
+  }
+  const archivedAt = typeof value.archivedAt === 'string' ? value.archivedAt : null
+  if (archivedAt !== null && value.column !== 'done') {
+    return fail('is archived but not in Done')
   }
   if (!isOneOf(value.type, CARD_TYPES)) {
     return fail(`has an invalid type '${String(value.type)}'`)
@@ -280,6 +311,7 @@ function parseCard(
       comments: value.comments as Card['comments'],
       checklist: value.checklist as Card['checklist'],
       history,
+      archivedAt,
       requestId:
         typeof value.requestId === 'string' && requests.has(value.requestId)
           ? value.requestId

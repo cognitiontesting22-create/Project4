@@ -256,8 +256,9 @@ const cards: Card[] = ([
     createdAt: ago(20),
     updatedAt: ago(6),
   },
-] satisfies Omit<Card, 'checklist' | 'blockedBy' | 'history'>[]).map((card) => ({
+] satisfies Omit<Card, 'checklist' | 'blockedBy' | 'history' | 'archivedAt'>[]).map((card) => ({
   ...card,
+  archivedAt: null,
   history:
     card.column === 'todo'
       ? [{ column: 'todo' as const, enteredAt: card.createdAt }]
@@ -452,7 +453,7 @@ const activity: Activity[] = [
 
 export function createSeedData(): AppData {
   return {
-    version: 4,
+    version: 5,
     members,
     currentUserId: 'elena',
     cards,
@@ -466,6 +467,7 @@ export function createSeedData(): AppData {
     lastSeen: { elena: ago(1) },
     settings: {
       doingWipLimit: 3,
+      archiveAfterDays: 14,
       voteBudget: 10,
       maxVotesPerRequest: 5,
       weights: { rice: 0.5, votes: 0.3, revenue: 0.2 },

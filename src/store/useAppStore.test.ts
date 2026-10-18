@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseBoardFile } from '../domain/boardFile'
 import { cycleTimeDays } from '../domain/history'
+import type { Card } from '../domain/types'
 import { createSeedData } from './seed'
 
 class MemoryStorage implements Storage {
@@ -211,39 +212,53 @@ describe('useAppStore', () => {
       .toBe('check-105-1')
   })
 
-  it('migrates v1 workspace imports and persisted cards to version 4', async () => {
+  it('migrates v1 workspace imports and persisted cards to version 5', async () => {
     const current = createSeedData()
+    const { archiveAfterDays: _archiveAfterDays, ...settings } = current.settings
     const legacy = {
       ...current,
       version: 1,
+      settings,
       cards: current.cards.map(
-        ({ checklist: _checklist, blockedBy: _blockedBy, history: _history, ...card }) => card,
+        ({
+          checklist: _checklist,
+          blockedBy: _blockedBy,
+          history: _history,
+          archivedAt: _archivedAt,
+          ...card
+        }) => card,
       ),
     }
     expect(useAppStore.getState().importData(JSON.stringify(legacy))).toEqual({ ok: true })
-    expect(useAppStore.getState().version).toBe(4)
+    expect(useAppStore.getState().version).toBe(5)
+    expect(useAppStore.getState().settings.archiveAfterDays).toBe(14)
     expect(useAppStore.getState().cards.every((card) => Array.isArray(card.checklist))).toBe(true)
     expect(useAppStore.getState().cards.every((card) => card.blockedBy.length === 0)).toBe(true)
 
     localStorage.setItem('relay:data', JSON.stringify({ state: legacy, version: 1 }))
     await useAppStore.persist.rehydrate()
-    expect(useAppStore.getState().version).toBe(4)
+    expect(useAppStore.getState().version).toBe(5)
     expect(useAppStore.getState().cards.every((card) => Array.isArray(card.checklist))).toBe(true)
   })
 
-  it('migrates v2 data to version 4 with empty blockers and drops unknown blocker ids', async () => {
+  it('migrates v2 data to version 5 with empty blockers and drops unknown blocker ids', async () => {
     const current = createSeedData()
+    const { archiveAfterDays: _archiveAfterDays, ...settings } = current.settings
     const v2 = {
       ...current,
       version: 2,
-      cards: current.cards.map(({ blockedBy: _blockedBy, history: _history, ...card }) =>
-        card.id === 'card-101' ? { ...card, blockedBy: ['card-105', 'missing', 'card-101'] } : card,
+      settings,
+      cards: current.cards.map(
+        ({ blockedBy: _blockedBy, history: _history, archivedAt: _archivedAt, ...card }) =>
+          card.id === 'card-101'
+            ? { ...card, blockedBy: ['card-105', 'missing', 'card-101'] }
+            : card,
       ),
     }
     localStorage.setItem('relay:data', JSON.stringify({ state: v2, version: 2 }))
     await useAppStore.persist.rehydrate()
     const cards = useAppStore.getState().cards
-    expect(useAppStore.getState().version).toBe(4)
+    expect(useAppStore.getState().version).toBe(5)
     expect(cards.find((card) => card.id === 'card-101')?.blockedBy).toEqual(['card-105'])
     expect(cards.filter((card) => card.id !== 'card-101').every((card) => card.blockedBy.length === 0))
       .toBe(true)
@@ -625,13 +640,17 @@ describe('card history', () => {
 
   it('migrates version 3 imports and persisted data without card history', async () => {
     const current = createSeedData()
+    const { archiveAfterDays: _archiveAfterDays, ...settings } = current.settings
     const v3 = {
       ...current,
       version: 3,
-      cards: current.cards.map(({ history: _history, ...card }) => card),
+      settings,
+      cards: current.cards.map(({ history: _history, archivedAt: _archivedAt, ...card }) => card),
     }
     expect(useAppStore.getState().importData(JSON.stringify(v3))).toEqual({ ok: true })
-    expect(useAppStore.getState().version).toBe(4)
+    expect(useAppStore.getState().version).toBe(5)
+    expect(useAppStore.getState().settings.archiveAfterDays).toBe(14)
+    expect(useAppStore.getState().cards.every((card) => card.archivedAt === null)).toBe(true)
     expect(useAppStore.getState().cards.every((card) =>
       card.history.length === 1 &&
       card.history[0].column === card.column &&
@@ -640,12 +659,361 @@ describe('card history', () => {
 
     localStorage.setItem('relay:data', JSON.stringify({ state: v3, version: 3 }))
     await useAppStore.persist.rehydrate()
-    expect(useAppStore.getState().version).toBe(4)
+    expect(useAppStore.getState().version).toBe(5)
     expect(useAppStore.getState().cards.every((card) =>
       card.history.length === 1 &&
       card.history[0].column === card.column &&
       card.history[0].enteredAt === card.updatedAt,
     )).toBe(true)
+  })
+
+  it('migrates version 4 data to version 5 with safe archive defaults', async () => {
+    const current = createSeedData()
+    const { archiveAfterDays: _archiveAfterDays, ...settings } = current.settings
+    const v4 = {
+      ...current,
+      version: 4,
+      settings,
+      cards: current.cards.map(({ archivedAt: _archivedAt, ...card }) => card),
+    }
+
+    expect(useAppStore.getState().importData(JSON.stringify(v4))).toEqual({ ok: true })
+    expect(useAppStore.getState().version).toBe(5)
+    expect(useAppStore.getState().settings.archiveAfterDays).toBe(14)
+    expect(useAppStore.getState().cards.every((card) => card.archivedAt === null)).toBe(true)
+
+    localStorage.setItem('relay:data', JSON.stringify({ state: v4, version: 4 }))
+    await useAppStore.persist.rehydrate()
+    expect(useAppStore.getState().version).toBe(5)
+    expect(useAppStore.getState().settings.archiveAfterDays).toBe(14)
+    expect(useAppStore.getState().cards.every((card) => card.archivedAt === null)).toBe(true)
+  })
+
+  it('defaults out-of-range archive ages during migration', () => {
+    const data = { ...createSeedData(), version: 4 }
+    const legacyCards = data.cards.map(({ archivedAt: _archivedAt, ...card }) => card)
+    const legacy = { ...data, cards: legacyCards }
+
+    expect(useAppStore.getState().importData(JSON.stringify({
+      ...legacy,
+      settings: { ...legacy.settings, archiveAfterDays: 30 },
+    }))).toEqual({ ok: true })
+    expect(useAppStore.getState().settings.archiveAfterDays).toBe(30)
+
+    expect(useAppStore.getState().importData(JSON.stringify({
+      ...legacy,
+      settings: { ...legacy.settings, archiveAfterDays: 366 },
+    }))).toEqual({ ok: true })
+    expect(useAppStore.getState().settings.archiveAfterDays).toBe(14)
+  })
+
+  it('preserves only string archivedAt values during migration', () => {
+    const current = createSeedData()
+    const v4 = {
+      ...current,
+      version: 4,
+      cards: current.cards.map((card) =>
+        card.id === 'card-109'
+          ? { ...card, archivedAt: '2026-10-20T12:00:00.000Z' }
+          : card.id === 'card-101'
+            ? { ...card, archivedAt: 42 }
+            : card,
+      ),
+    }
+
+    expect(useAppStore.getState().importData(JSON.stringify(v4))).toEqual({ ok: true })
+    expect(useAppStore.getState().cards.find((card) => card.id === 'card-109')?.archivedAt)
+      .toBe('2026-10-20T12:00:00.000Z')
+    expect(useAppStore.getState().cards.find((card) => card.id === 'card-101')?.archivedAt)
+      .toBeNull()
+  })
+})
+
+describe('card archiving', () => {
+  const base = createSeedData().cards[0]
+  const makeCard = (patch: Partial<Card>): Card => ({ ...base, ...patch })
+  const cardById = (id: string) => useAppStore.getState().cards.find((card) => card.id === id)!
+
+  it('archives only cards past the strict latest-Done boundary in one undoable change', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const now = '2026-10-20T12:00:00.000Z'
+    vi.setSystemTime(new Date(now))
+    const current = useAppStore.getState()
+    const seedCards = current.cards.map((card) => {
+      if (card.column !== 'done') return card
+      const history = [...card.history]
+      history[history.length - 1] = { ...history[history.length - 1], enteredAt: '2026-10-20T11:00:00.000Z' }
+      return { ...card, history }
+    })
+    const extraCards = [
+      makeCard({
+        id: 'archive-A',
+        title: 'A',
+        column: 'done',
+        archivedAt: null,
+        createdAt: '2026-09-01T00:00:00.000Z',
+        updatedAt: now,
+        history: [
+          { column: 'todo', enteredAt: '2026-09-20T00:00:00.000Z' },
+          { column: 'doing', enteredAt: '2026-09-25T00:00:00.000Z' },
+          { column: 'done', enteredAt: '2026-10-05T11:59:00.000Z' },
+        ],
+        blockedBy: [],
+        checklist: [],
+        requestId: null,
+      }),
+      makeCard({
+        id: 'archive-B',
+        title: 'B',
+        column: 'done',
+        archivedAt: null,
+        createdAt: '2026-09-01T00:00:00.000Z',
+        updatedAt: '2026-09-25T00:00:00.000Z',
+        history: [
+          { column: 'todo', enteredAt: '2026-09-01T00:00:00.000Z' },
+          { column: 'doing', enteredAt: '2026-09-20T00:00:00.000Z' },
+          { column: 'done', enteredAt: '2026-10-06T12:00:00.000Z' },
+        ],
+        blockedBy: [],
+        checklist: [],
+        requestId: null,
+      }),
+      makeCard({
+        id: 'archive-C',
+        title: 'C',
+        column: 'done',
+        archivedAt: null,
+        history: [
+          { column: 'todo', enteredAt: '2026-09-01T00:00:00.000Z' },
+          { column: 'doing', enteredAt: '2026-09-20T00:00:00.000Z' },
+          { column: 'done', enteredAt: '2026-10-01T00:00:00.000Z' },
+          { column: 'doing', enteredAt: '2026-10-10T00:00:00.000Z' },
+          { column: 'done', enteredAt: '2026-10-15T12:00:00.000Z' },
+        ],
+        blockedBy: [],
+        checklist: [],
+        requestId: null,
+      }),
+      makeCard({
+        id: 'archive-D',
+        title: 'D',
+        column: 'doing',
+        archivedAt: null,
+        createdAt: '2026-09-01T00:00:00.000Z',
+        history: [
+          { column: 'todo', enteredAt: '2026-09-01T00:00:00.000Z' },
+          { column: 'doing', enteredAt: '2026-09-02T00:00:00.000Z' },
+        ],
+        blockedBy: [],
+        checklist: [],
+        requestId: null,
+      }),
+    ]
+    const activityBefore = current.activity
+    const requestsBefore = current.requests
+    useAppStore.setState({
+      cards: [...seedCards, ...extraCards],
+      columnOrder: {
+        ...current.columnOrder,
+        doing: [...current.columnOrder.doing, 'archive-D'],
+        done: [...current.columnOrder.done, 'archive-A', 'archive-B', 'archive-C'],
+      },
+      settings: { ...current.settings, archiveAfterDays: 14 },
+    })
+    const beforeHistory = cardById('archive-A').history
+    const beforeCardCount = useAppStore.getState().cards.length
+
+    expect(useAppStore.getState().archiveOldDoneCards()).toBe(1)
+
+    expect(cardById('archive-A')).toMatchObject({
+      archivedAt: now,
+      updatedAt: now,
+      column: 'done',
+      history: beforeHistory,
+    })
+    expect(useAppStore.getState().cards).toHaveLength(beforeCardCount)
+    expect(useAppStore.getState().columnOrder.done).not.toContain('archive-A')
+    expect(useAppStore.getState().columnOrder.done).toContain('archive-B')
+    expect(useAppStore.getState().columnOrder.done).toContain('archive-C')
+    expect(useAppStore.getState().columnOrder.doing).toContain('archive-D')
+    expect(cardById('archive-D').archivedAt).toBeNull()
+    expect(useAppStore.getState().activity).toBe(activityBefore)
+    expect(useAppStore.getState().requests).toBe(requestsBefore)
+    expect(useAppStore.getState().past).toHaveLength(1)
+    expect(useAppStore.getState().past.at(-1)?.label).toBe('Archive old Done cards')
+  })
+
+  it('returns zero without setting state when no cards qualify', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const now = '2026-10-20T12:00:00.000Z'
+    vi.setSystemTime(new Date(now))
+    const current = useAppStore.getState()
+    const cards = current.cards.map((card) => {
+      if (card.column !== 'done') return card
+      const history = [...card.history]
+      history[history.length - 1] = { ...history[history.length - 1], enteredAt: now }
+      return { ...card, history }
+    })
+    useAppStore.setState({ cards })
+    const before = useAppStore.getState()
+    const listener = vi.fn()
+    const unsubscribe = useAppStore.subscribe(listener)
+
+    expect(useAppStore.getState().archiveOldDoneCards()).toBe(0)
+    unsubscribe()
+
+    expect(listener).not.toHaveBeenCalled()
+    expect(useAppStore.getState().cards).toBe(before.cards)
+    expect(useAppStore.getState().columnOrder).toBe(before.columnOrder)
+    expect(useAppStore.getState().past).toBe(before.past)
+  })
+
+  it('archives Done cards and undo/redo restores their flag and Done order', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const now = '2026-10-20T12:00:00.000Z'
+    vi.setSystemTime(new Date(now))
+    const card = cardById('card-109')
+    const history = card.history
+    const originalOrder = useAppStore.getState().columnOrder.done
+    const activity = useAppStore.getState().activity
+    const requests = useAppStore.getState().requests
+
+    expect(useAppStore.getState().archiveCard(card.id)).toEqual({ ok: true })
+    expect(cardById(card.id)).toMatchObject({
+      archivedAt: now,
+      updatedAt: now,
+      column: 'done',
+      history,
+    })
+    expect(useAppStore.getState().columnOrder.done).not.toContain(card.id)
+    expect(useAppStore.getState().activity).toBe(activity)
+    expect(useAppStore.getState().requests).toBe(requests)
+    expect(useAppStore.getState().undo()).toBe(`Archive '${card.title}'`)
+    expect(cardById(card.id).archivedAt).toBeNull()
+    expect(useAppStore.getState().columnOrder.done).toEqual(originalOrder)
+    expect(useAppStore.getState().redo()).toBe(`Archive '${card.title}'`)
+    expect(cardById(card.id).archivedAt).toBe(now)
+  })
+
+  it('does not mutate state or add undo entries when archive requests are refused', () => {
+    expect(useAppStore.getState().archiveCard('missing-card')).toEqual({ ok: true })
+    const beforeNotDone = useAppStore.getState()
+    expect(useAppStore.getState().archiveCard('card-101')).toEqual({
+      ok: false,
+      reason: 'Only Done cards can be archived.',
+    })
+    expect(useAppStore.getState().cards).toBe(beforeNotDone.cards)
+    expect(useAppStore.getState().columnOrder).toBe(beforeNotDone.columnOrder)
+    expect(useAppStore.getState().past).toBe(beforeNotDone.past)
+
+    useAppStore.setState((state) => ({
+      cards: state.cards.map((card) =>
+        card.id === 'card-109' ? { ...card, archivedAt: '2026-10-01T00:00:00.000Z' } : card,
+      ),
+    }))
+    const beforeArchived = useAppStore.getState()
+    expect(useAppStore.getState().archiveCard('card-109')).toEqual({
+      ok: false,
+      reason: 'This card is already archived.',
+    })
+    expect(useAppStore.getState().cards).toBe(beforeArchived.cards)
+    expect(useAppStore.getState().columnOrder).toBe(beforeArchived.columnOrder)
+    expect(useAppStore.getState().past).toBe(beforeArchived.past)
+  })
+
+  it('refuses moves on archived cards but allows detail edits without allowing unarchive patches', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-20T12:00:00.000Z'))
+    const card = cardById('card-109')
+    useAppStore.getState().archiveCard(card.id)
+    const beforeMoves = useAppStore.getState().exportData()
+    const pastLength = useAppStore.getState().past.length
+
+    for (const column of ['todo', 'done'] as const) {
+      expect(useAppStore.getState().moveCard(card.id, column, 0)).toEqual({
+        ok: false,
+        reason: 'Restore this card before moving it.',
+      })
+    }
+    expect(useAppStore.getState().updateCard(card.id, { column: 'doing' })).toEqual({
+      ok: false,
+      reason: 'Restore this card before moving it.',
+    })
+    expect(useAppStore.getState().exportData()).toBe(beforeMoves)
+    expect(useAppStore.getState().past).toHaveLength(pastLength)
+
+    expect(useAppStore.getState().updateCard(card.id, { title: 'Archived details updated' }))
+      .toEqual({ ok: true })
+    expect(cardById(card.id).title).toBe('Archived details updated')
+    const archivedAt = cardById(card.id).archivedAt
+    const pastAfterEdit = useAppStore.getState().past.length
+    expect(useAppStore.getState().updateCard(card.id, { archivedAt: null })).toEqual({ ok: true })
+    expect(cardById(card.id).archivedAt).toBe(archivedAt)
+    expect(useAppStore.getState().past).toHaveLength(pastAfterEdit)
+  })
+
+  it('keeps archived blockers linked and treats them as finished for Done moves', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-20T12:00:00.000Z'))
+    expect(useAppStore.getState().moveCard('card-106', 'done', 0)).toEqual({ ok: true })
+    expect(useAppStore.getState().archiveCard('card-106')).toEqual({ ok: true })
+
+    expect(useAppStore.getState().moveCard('card-102', 'done', 0)).toEqual({ ok: true })
+    expect(cardById('card-102').blockedBy).toContain('card-106')
+    expect(cardById('card-106').archivedAt).not.toBeNull()
+  })
+
+  it('leaves linked requests shipped when archiving their Done card', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-20T12:00:00.000Z'))
+    useAppStore.setState((state) => ({
+      cards: state.cards.map((card) =>
+        card.id === 'card-109'
+          ? { ...card, requestId: 'request-201' }
+          : card.id === 'card-104'
+            ? { ...card, requestId: null }
+            : card,
+      ),
+      requests: state.requests.map((request) =>
+        request.id === 'request-201'
+          ? { ...request, status: 'shipped', cardId: 'card-109' }
+          : request,
+      ),
+    }))
+
+    expect(useAppStore.getState().archiveCard('card-109')).toEqual({ ok: true })
+    expect(useAppStore.getState().requests.find((request) => request.id === 'request-201'))
+      .toMatchObject({ status: 'shipped', cardId: 'card-109' })
+  })
+
+  it('does not auto-move an archived card when its checklist is unticked', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-20T12:00:00.000Z'))
+    const card = cardById('card-109')
+    useAppStore.getState().archiveCard(card.id)
+
+    expect(useAppStore.getState().updateChecklistItem(card.id, 'check-109-1', { done: false }))
+      .toMatchObject({ ok: true })
+    expect(cardById(card.id)).toMatchObject({
+      column: 'done',
+      archivedAt: expect.any(String),
+    })
+    expect(cardById(card.id).checklist[0].done).toBe(false)
+    expect(useAppStore.getState().columnOrder.done).not.toContain(card.id)
+  })
+
+  it('sets archivedAt to null on new and promoted cards', () => {
+    useAppStore.getState().addCard({
+      title: 'Unarchived new card',
+      column: 'todo',
+      archivedAt: '2026-10-01T00:00:00.000Z',
+    })
+    expect(useAppStore.getState().cards.find((card) => card.title === 'Unarchived new card')?.archivedAt)
+      .toBeNull()
+
+    const requestId = useAppStore.getState().addRequest({ title: 'Promote with archive flag' })
+    const cardId = useAppStore.getState().promoteRequest(requestId)
+    expect(cardById(cardId).archivedAt).toBeNull()
   })
 })
 

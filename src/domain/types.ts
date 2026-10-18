@@ -54,6 +54,7 @@ export interface Card {
   blockedReason: string
   blockedBy: string[] // ids of cards that must be Done before this one can move to Done
   history: CardHistoryEntry[] // oldest first; last entry matches column
+  archivedAt: string | null
   comments: Comment[]
   checklist: ChecklistItem[]
   requestId: string | null // feature request this card was promoted from
@@ -115,13 +116,14 @@ export interface ScoringWeights {
 
 export interface Settings {
   doingWipLimit: number // 0 = no limit
+  archiveAfterDays: number
   voteBudget: number // points per member across active (open|planned) requests
   maxVotesPerRequest: number
   weights: ScoringWeights
 }
 
 export interface AppData {
-  version: 4
+  version: 5
   members: Member[]
   currentUserId: string
   cards: Card[]
