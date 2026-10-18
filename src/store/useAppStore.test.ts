@@ -500,7 +500,7 @@ describe('card history', () => {
   const cardByTitle = (title: string) =>
     useAppStore.getState().cards.find((card) => card.title === title)!
 
-  it('records each move and calculates cycle time from the first Doing entry', () => {
+  it('appends move history in the worked 3.5-day then 6-day cycle-time example', () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const createdAt = '2026-10-01T09:00:00.000Z'
     vi.setSystemTime(new Date(createdAt))
@@ -540,7 +540,7 @@ describe('card history', () => {
       .toEqual(before.history)
   })
 
-  it('leaves the whole card unchanged when WIP and blocker rules refuse moves', () => {
+  it('refuses a move into full Doing and leaves the whole card and history unchanged', () => {
     const beforeWip = useAppStore.getState().cards.find((card) => card.id === 'card-101')!
     expect(useAppStore.getState().moveCard('card-101', 'doing', 0).ok).toBe(false)
     expect(useAppStore.getState().updateCard('card-101', { column: 'doing' }).ok).toBe(false)
@@ -575,7 +575,7 @@ describe('card history', () => {
       .toMatchObject({ title: 'x', history: moved.history })
   })
 
-  it('records checklist auto-moves to Done, Doing, and To do', () => {
+  it('appends history for checklist auto-moves to Done, Doing, and To do', () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     useAppStore.getState().updateSettings({ doingWipLimit: 0 })
     vi.setSystemTime(new Date('2026-10-01T09:00:00.000Z'))
@@ -609,7 +609,7 @@ describe('card history', () => {
       .toEqual({ column: 'todo', enteredAt: '2026-10-05T09:00:00.000Z' })
   })
 
-  it('uses provided creation time and ignores provided history', () => {
+  it('starts a new card with one entry matching its column and createdAt', () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-10-02T09:00:00.000Z'))
     useAppStore.getState().addCard({
@@ -653,7 +653,7 @@ describe('card history', () => {
       .toBe('2026-10-02T09:00:00.000Z')
   })
 
-  it('migrates v3 imports and persisted data with creation-based histories', async () => {
+  it('migrates a v3 workspace and backup to v4 with Amit history and age defaults', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const now = '2026-10-20T12:00:00.000Z'
     vi.setSystemTime(new Date(now))
@@ -800,7 +800,7 @@ describe('card history', () => {
     expect(exported.settings).toMatchObject({ archiveAfterDays: 14, staleAfterDays: 5 })
   })
 
-  it('round trips version 4 cards, order, settings, and an archived card', () => {
+  it('round trips a version 4 export with an archived card and both age settings', () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-10-20T12:00:00.000Z'))
     const store = useAppStore.getState()
@@ -846,7 +846,7 @@ describe('card history', () => {
     expect(useAppStore.getState().settings.archiveAfterDays).toBe(14)
   })
 
-  it('validates stale age values and rejects imports above version 4', () => {
+  it('validates stale ages and rejects version 5 imports with the exact v4 refusal message', () => {
     const current = createSeedData()
     const v4 = { ...current, version: 4 }
 
@@ -920,7 +920,7 @@ describe('card archiving', () => {
   const makeCard = (patch: Partial<Card>): Card => ({ ...base, ...patch })
   const cardById = (id: string) => useAppStore.getState().cards.find((card) => card.id === id)!
 
-  it('archives only cards past the strict latest-Done boundary in one undoable change', () => {
+  it('archives at 14 days and 1 minute with "Archive 1 Done cards", preserving the boundary and recent re-entry', () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const now = '2026-10-20T12:00:00.000Z'
     vi.setSystemTime(new Date(now))
@@ -942,7 +942,7 @@ describe('card archiving', () => {
         history: [
           { column: 'todo', enteredAt: '2026-09-20T00:00:00.000Z' },
           { column: 'doing', enteredAt: '2026-09-25T00:00:00.000Z' },
-          { column: 'done', enteredAt: '2026-10-05T11:59:00.000Z' },
+          { column: 'done', enteredAt: '2026-10-06T11:59:00.000Z' },
         ],
         blockedBy: [],
         checklist: [],
@@ -1039,7 +1039,7 @@ describe('card archiving', () => {
     expect(useAppStore.getState().past.at(-1)?.label).toBe('Archive 1 Done cards')
   })
 
-  it('undoes and redoes a two-card bulk archive at the original Done positions', () => {
+  it('undoes and redoes bulk archive as one "Archive N Done cards" step at original positions', () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const now = '2026-10-20T12:00:00.000Z'
     vi.setSystemTime(new Date(now))
@@ -1176,7 +1176,7 @@ describe('card archiving', () => {
     expect(useAppStore.getState().activity.every((item) => item.kind === 'card_archived')).toBe(true)
   })
 
-  it('archives Done cards and undo/redo restores their flag and Done order', () => {
+  it(`undoes and redoes a single archive with the "Archive '<title>'" label and card_archived activity`, () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const now = '2026-10-20T12:00:00.000Z'
     vi.setSystemTime(new Date(now))
@@ -1239,7 +1239,7 @@ describe('card archiving', () => {
     expect(useAppStore.getState().columnOrder.done).toEqual([first.id, last])
   })
 
-  it('restores archived cards at the front and undo keeps the original archive timestamp', () => {
+  it(`restores to Done index 0 with unchanged history, the "Restore '<title>'" label, and card_restored activity`, () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const originalArchivedAt = '2026-10-20T12:00:00.000Z'
     vi.setSystemTime(new Date(originalArchivedAt))
@@ -1292,7 +1292,7 @@ describe('card archiving', () => {
     })
   })
 
-  it('refuses to restore an unarchived card without changing state or undo history', () => {
+  it('refuses to restore an unarchived card with the exact reason and no state change', () => {
     const before = useAppStore.getState()
     const beforeData = useAppStore.getState().exportData()
     expect(useAppStore.getState().restoreCard('missing-card')).toEqual({ ok: true })
@@ -1319,7 +1319,7 @@ describe('card archiving', () => {
     expect(useAppStore.getState().past).toHaveLength(100)
   })
 
-  it('does not mutate state or add undo entries when archive requests are refused', () => {
+  it('refuses archiving outside Done or an already archived card with exact reasons', () => {
     expect(useAppStore.getState().archiveCard('missing-card')).toEqual({ ok: true })
     const beforeNotDone = useAppStore.getState()
     expect(useAppStore.getState().archiveCard('card-101')).toEqual({
@@ -1347,7 +1347,7 @@ describe('card archiving', () => {
     expect(useAppStore.getState().activity).toBe(beforeArchived.activity)
   })
 
-  it('refuses moves on archived cards but allows detail edits without allowing unarchive patches', () => {
+  it('refuses moving archived cards with the restore reason while allowing detail edits', () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-10-20T12:00:00.000Z'))
     const card = cardById('card-109')

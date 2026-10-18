@@ -18,7 +18,7 @@ describe('card history', () => {
     { column: 'done', enteredAt: '2026-10-05T21:00:00.000Z' },
   ] satisfies Card['history']
 
-  it('calculates cycle time, time in column, and the latest Done time', () => {
+  it('calculates 3.5-day cycle time, time in column, and latest Done time in the worked example', () => {
     const card = { column: 'done', history } satisfies Pick<Card, 'column' | 'history'>
 
     expect(cycleTimeDays(card)).toBe(3.5)
@@ -27,7 +27,7 @@ describe('card history', () => {
     expect(timeInColumnDays(card, new Date('2026-10-06T09:00:00.000Z'))).toBe(0.5)
   })
 
-  it('calculates cycle time from the first Doing entry through the latest Done entry', () => {
+  it('returns 6.0 days after a second Done cycle and null while back in Doing', () => {
     const doingCard = {
       column: 'doing',
       history: [...history, { column: 'doing', enteredAt: '2026-10-07T09:00:00.000Z' }],
@@ -55,7 +55,7 @@ describe('card history', () => {
     ).toBeNull()
   })
 
-  it('formats days to one decimal place', () => {
+  it('formats one day as "1.0 days"', () => {
     expect(formatDays(3.5)).toBe('3.5 days')
     expect(formatDays(1)).toBe('1.0 days')
     expect(formatDays(0)).toBe('0.0 days')

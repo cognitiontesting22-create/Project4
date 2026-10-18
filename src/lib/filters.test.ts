@@ -55,7 +55,7 @@ describe('board filters', () => {
       .toEqual(['one', 'three'])
   })
 
-  it('excludes archived cards before empty, query, and blocked-only filters', () => {
+  it('does not return archived cards from filterCards for empty, query, or blocked-only filters', () => {
     const cards = [
       { ...card('active', []), title: 'Retry live task', blocked: true },
       { ...card('archived', []), title: 'Retry archived task', blocked: true, archivedAt: '2026-10-01T00:00:00.000Z' },
@@ -111,7 +111,7 @@ describe('archived card filters', () => {
     archivedAt: '2026-10-21T00:00:00.000Z',
   }
 
-  it('sorts archived cards newest-first and searches only titles', () => {
+  it('sorts archived cards newest-first and matches titles case-insensitively only', () => {
     expect(archivedCards(cards, '').map((item) => item.title)).toEqual([
       'Login page copy',
       'Billing export',

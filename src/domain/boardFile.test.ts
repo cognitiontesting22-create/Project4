@@ -56,7 +56,7 @@ describe('board file format', () => {
     })
   })
 
-  it('backfills legacy histories from creation and update times', () => {
+  it('imports legacy board files without history or archivedAt using rebuilt histories', () => {
     const legacy = boardData()
     for (const card of legacy.cards) {
       delete card.history
@@ -80,12 +80,12 @@ describe('board file format', () => {
   })
 
   it.each([
-    'not an array',
-    [],
-    [{ column: 'later', enteredAt: '2026-10-01T09:00:00.000Z' }],
-    [{ column: 'todo', enteredAt: 'not a date' }],
-    [{ column: 'doing', enteredAt: '2026-10-01T09:00:00.000Z' }],
-  ])('rejects malformed history %j', (history) => {
+    ['non-array history', 'not an array'],
+    ['empty history', []],
+    ['history with an invalid column', [{ column: 'later', enteredAt: '2026-10-01T09:00:00.000Z' }]],
+    ['history with an unparseable timestamp', [{ column: 'todo', enteredAt: 'not a date' }]],
+    ['history whose last column mismatches', [{ column: 'doing', enteredAt: '2026-10-01T09:00:00.000Z' }]],
+  ])('returns "has an invalid history" for %s', (_case, history) => {
     const invalid = boardData()
     invalid.cards[1].title = 'Fix login redirect'
     invalid.cards[1].history = history
@@ -95,7 +95,7 @@ describe('board file format', () => {
     })
   })
 
-  it('round trips archived cards outside column order with a valid archived time', () => {
+  it('round trips an archived card outside column order and imports legacy missing fields', () => {
     const archivedCard = seed.cards.find((card) => card.column === 'done')!
     const cards = seed.cards.map((card) =>
       card.id === archivedCard.id
@@ -148,23 +148,29 @@ describe('board file format', () => {
     })
   })
 
-  it('rejects archived cards with invalid times, in non-Done, or listed in column order', () => {
-    for (const archivedAt of [42, {}, 'not a date']) {
-      const invalid = boardData()
-      invalid.cards[0].archivedAt = archivedAt
-      expect(parse(invalid)).toEqual({
-        ok: false,
-        reason: "Card 1 ('Harden webhook retry handling') has an invalid archived time",
-      })
-    }
+  it.each([
+    ['number timestamp', 42],
+    ['object timestamp', {}],
+    ['unparseable timestamp string', 'not a date'],
+  ])('returns "has an invalid archived time" for a %s', (_case, archivedAt) => {
+    const invalid = boardData()
+    invalid.cards[0].archivedAt = archivedAt
+    expect(parse(invalid)).toEqual({
+      ok: false,
+      reason: "Card 1 ('Harden webhook retry handling') has an invalid archived time",
+    })
+  })
 
+  it('returns "is archived but not in Done" for an archived non-Done card', () => {
     const notDone = boardData()
     notDone.cards[0].archivedAt = '2026-10-20T12:00:00.000Z'
     expect(parse(notDone)).toEqual({
       ok: false,
       reason: "Card 1 ('Harden webhook retry handling') is archived but not in Done",
     })
+  })
 
+  it('returns "is archived but listed in column order" for a listed archived card', () => {
     const listed = boardData()
     const archivedCard = listed.cards.find((card) => card.column === 'done')!
     archivedCard.archivedAt = '2026-10-20T12:00:00.000Z'
