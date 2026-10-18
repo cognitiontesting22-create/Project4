@@ -32,9 +32,15 @@ export function formatDays(n: number): string {
 }
 
 export function backfillHistory(
-  card: Pick<Card, 'column' | 'updatedAt'>,
+  card: Pick<Card, 'column' | 'createdAt' | 'updatedAt'>,
 ): CardHistoryEntry[] {
-  return [{ column: card.column, enteredAt: card.updatedAt }]
+  if (card.column === 'todo') {
+    return [{ column: 'todo', enteredAt: card.createdAt }]
+  }
+  return [
+    { column: 'todo', enteredAt: card.createdAt },
+    { column: card.column, enteredAt: card.updatedAt },
+  ]
 }
 
 export function isValidHistory(value: unknown, column: ColumnId): value is CardHistoryEntry[] {
@@ -43,7 +49,8 @@ export function isValidHistory(value: unknown, column: ColumnId): value is CardH
     value.every((entry: unknown) =>
       isRecord(entry) &&
       isColumnId(entry.column) &&
-      typeof entry.enteredAt === 'string',
+      typeof entry.enteredAt === 'string' &&
+      Number.isFinite(Date.parse(entry.enteredAt)),
     ) &&
     (value[value.length - 1] as CardHistoryEntry).column === column
   )

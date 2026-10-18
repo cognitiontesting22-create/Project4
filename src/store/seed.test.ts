@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { isValidHistory } from '../domain/history'
 import { votesUsed } from '../domain/scoring'
 import { createSeedData } from './seed'
 
@@ -6,10 +7,15 @@ describe('createSeedData', () => {
   it('starts at the default Doing WIP limit', () => {
     const data = createSeedData()
 
+    expect(data.version).toBe(4)
     expect(data.settings.doingWipLimit).toBe(3)
     expect(data.settings.archiveAfterDays).toBe(14)
     expect(data.settings.staleAfterDays).toBe(5)
     expect(data.cards.every((card) => card.archivedAt === null)).toBe(true)
+    expect(data.cards.every((card) =>
+      isValidHistory(card.history, card.column) &&
+      card.history.at(-1)?.column === card.column,
+    )).toBe(true)
     expect(data.columnOrder.doing).toHaveLength(3)
   })
 

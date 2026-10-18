@@ -207,9 +207,9 @@ function parseCard(
   if (
     value.archivedAt !== undefined &&
     value.archivedAt !== null &&
-    typeof value.archivedAt !== 'string'
+    (typeof value.archivedAt !== 'string' || !Number.isFinite(Date.parse(value.archivedAt)))
   ) {
-    return fail('has an invalid archivedAt')
+    return fail('has an invalid archived time')
   }
   const archivedAt = typeof value.archivedAt === 'string' ? value.archivedAt : null
   if (archivedAt !== null && value.column !== 'done') {
@@ -284,6 +284,7 @@ function parseCard(
     value.history === undefined
       ? backfillHistory({
           column: value.column as ColumnId,
+          createdAt: value.createdAt,
           updatedAt: value.updatedAt,
         })
       : value.history

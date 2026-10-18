@@ -453,7 +453,7 @@ const activity: Activity[] = [
 
 export function createSeedData(): AppData {
   return {
-    version: 6,
+    version: 4,
     members,
     currentUserId: 'elena',
     cards,

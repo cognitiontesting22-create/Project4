@@ -87,6 +87,8 @@ export interface FeatureRequest {
 
 export type ActivityKind =
   | 'card_created'
+  | 'card_archived'
+  | 'card_restored'
   | 'card_moved'
   | 'card_updated'
   | 'card_deleted'
@@ -124,7 +126,7 @@ export interface Settings {
 }
 
 export interface AppData {
-  version: 6
+  version: 4
   members: Member[]
   currentUserId: string
   cards: Card[]

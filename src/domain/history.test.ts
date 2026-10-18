@@ -62,11 +62,22 @@ describe('card history', () => {
   })
 
   it('backfills legacy history and validates the current-column invariant', () => {
-    expect(backfillHistory({ column: 'doing', updatedAt: '2026-10-02T09:00:00.000Z' }))
-      .toEqual([{ column: 'doing', enteredAt: '2026-10-02T09:00:00.000Z' }])
+    const createdAt = '2026-10-01T09:00:00.000Z'
+    const updatedAt = '2026-10-02T09:00:00.000Z'
+    expect(backfillHistory({ column: 'todo', createdAt, updatedAt }))
+      .toEqual([{ column: 'todo', enteredAt: createdAt }])
+    expect(backfillHistory({ column: 'doing', createdAt, updatedAt })).toEqual([
+      { column: 'todo', enteredAt: createdAt },
+      { column: 'doing', enteredAt: updatedAt },
+    ])
+    expect(backfillHistory({ column: 'done', createdAt, updatedAt })).toEqual([
+      { column: 'todo', enteredAt: createdAt },
+      { column: 'done', enteredAt: updatedAt },
+    ])
     expect(isValidHistory(history, 'done')).toBe(true)
     expect(isValidHistory([], 'todo')).toBe(false)
-    expect(isValidHistory([{ column: 'later', enteredAt: 'now' }], 'todo')).toBe(false)
-    expect(isValidHistory([{ column: 'doing', enteredAt: 'now' }], 'todo')).toBe(false)
+    expect(isValidHistory([{ column: 'later', enteredAt: createdAt }], 'todo')).toBe(false)
+    expect(isValidHistory([{ column: 'doing', enteredAt: createdAt }], 'todo')).toBe(false)
+    expect(isValidHistory([{ column: 'todo', enteredAt: 'not a date' }], 'todo')).toBe(false)
   })
 })

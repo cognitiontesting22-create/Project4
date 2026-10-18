@@ -548,6 +548,17 @@ export const useAppStore = create<AppStore>()(
             ...current.columnOrder,
             done: current.columnOrder.done.filter((cardId) => cardId !== id),
           },
+          activity: addActivity(
+            current.activity,
+            makeActivity(current, {
+              kind: 'card_archived',
+              targetType: 'card',
+              targetId: card.id,
+              targetTitle: card.title,
+              detail: 'archived the card',
+              createdAt: now,
+            }),
+          ),
         }))
         return { ok: true }
       },
@@ -570,6 +581,17 @@ export const useAppStore = create<AppStore>()(
             ...current.columnOrder,
             done: [id, ...current.columnOrder.done.filter((cardId) => cardId !== id)],
           },
+          activity: addActivity(
+            current.activity,
+            makeActivity(current, {
+              kind: 'card_restored',
+              targetType: 'card',
+              targetId: card.id,
+              targetTitle: card.title,
+              detail: 'restored the card to Done',
+              createdAt: now,
+            }),
+          ),
         }))
         return { ok: true }
       },
@@ -591,6 +613,19 @@ export const useAppStore = create<AppStore>()(
             ...current.columnOrder,
             done: current.columnOrder.done.filter((id) => !ids.has(id)),
           },
+          activity: addActivities(
+            current.activity,
+            cards.map((card) =>
+              makeActivity(current, {
+                kind: 'card_archived',
+                targetType: 'card',
+                targetId: card.id,
+                targetTitle: card.title,
+                detail: 'archived the card',
+                createdAt: archivedAt,
+              }),
+            ),
+          ),
         }))
         return cards.length
       },
@@ -977,7 +1012,7 @@ export const useAppStore = create<AppStore>()(
           return { ok: false, reason: 'Invalid JSON.' }
         }
         const data = migrateWorkspaceData(parsed)
-        if (!data) return { ok: false, reason: 'Import must be Relay data version 1, 2, 3, 4, 5 or 6.' }
+        if (!data) return { ok: false, reason: 'Import must be Relay data version 1, 2, 3 or 4.' }
         set((state) => ({
           ...data,
           ...recordHistory(state, 'Import data'),
@@ -1015,11 +1050,11 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'relay:data',
-      version: 6,
+      version: 4,
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => toAppData(state),
       migrate: (persistedState, version) =>
-        version < 6
+        version < 4
           ? migrateWorkspaceData(persistedState) ?? createSeedData()
           : (persistedState as AppData),
       merge: (persistedState, currentState) => {
@@ -1252,7 +1287,7 @@ function columnTitle(column: ColumnId): string {
 }
 
 type LegacyAppData = Omit<AppData, 'version' | 'cards' | 'settings'> & {
-  version: 1 | 2 | 3 | 4 | 5 | 6
+  version: 1 | 2 | 3 | 4
   cards: Array<
     Omit<Card, 'checklist' | 'blockedBy' | 'history' | 'archivedAt'> & {
       checklist?: ChecklistItem[]
@@ -1273,7 +1308,7 @@ function migrateWorkspaceData(value: unknown): AppData | null {
   const ids = new Set(data.cards.map((card) => card.id))
   return {
     ...data,
-    version: 6,
+    version: 4,
     settings: {
       ...data.settings,
       archiveAfterDays:
@@ -1296,7 +1331,10 @@ function migrateWorkspaceData(value: unknown): AppData | null {
       history: isValidHistory(card.history, card.column)
         ? card.history
         : backfillHistory(card),
-      archivedAt: typeof card.archivedAt === 'string' ? card.archivedAt : null,
+      archivedAt:
+        typeof card.archivedAt === 'string' && Number.isFinite(Date.parse(card.archivedAt))
+          ? card.archivedAt
+          : null,
       checklist: Array.isArray(card.checklist) ? card.checklist : [],
       blockedBy: normalizeBlockedBy(
         Array.isArray(card.blockedBy)
@@ -1313,7 +1351,7 @@ function isAppData(value: unknown): value is AppData | LegacyAppData {
   if (typeof value !== 'object' || value === null) return false
   const data = value as Record<string, unknown>
   return (
-    (data.version === 1 || data.version === 2 || data.version === 3 || data.version === 4 || data.version === 5 || data.version === 6) &&
+    (data.version === 1 || data.version === 2 || data.version === 3 || data.version === 4) &&
     Array.isArray(data.members) &&
     Array.isArray(data.cards) &&
     Array.isArray(data.requests) &&

@@ -28,7 +28,12 @@ export function InboxView() {
   const items = tab === 'mine' ? activity.filter((a) => isRelevantTo(a, currentUserId, cards)) : activity
 
   const open = (a: Activity) => {
-    if (a.targetType === 'card' && cards.some((c) => c.id === a.targetId)) openCard(a.targetId)
+    if (a.targetType === 'card') {
+      const card = cards.find((item) => item.id === a.targetId)
+      if (!card) return
+      if (card.archivedAt !== null) useUiStore.getState().setView('archive')
+      else openCard(a.targetId)
+    }
     if (a.targetType === 'request' && requests.some((r) => r.id === a.targetId)) openRequest(a.targetId)
   }
 
