@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseBoardFile } from '../domain/boardFile'
+import { cycleTimeDays } from '../domain/history'
 import { createSeedData } from './seed'
 
 class MemoryStorage implements Storage {
@@ -43,6 +44,10 @@ beforeEach(() => {
     { ...useAppStore.getInitialState(), ...createSeedData() },
     true,
   )
+})
+
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 describe('useAppStore', () => {
@@ -206,37 +211,39 @@ describe('useAppStore', () => {
       .toBe('check-105-1')
   })
 
-  it('migrates v1 workspace imports and persisted cards to checklist version 2', async () => {
+  it('migrates v1 workspace imports and persisted cards to version 4', async () => {
     const current = createSeedData()
     const legacy = {
       ...current,
       version: 1,
-      cards: current.cards.map(({ checklist: _checklist, blockedBy: _blockedBy, ...card }) => card),
+      cards: current.cards.map(
+        ({ checklist: _checklist, blockedBy: _blockedBy, history: _history, ...card }) => card,
+      ),
     }
     expect(useAppStore.getState().importData(JSON.stringify(legacy))).toEqual({ ok: true })
-    expect(useAppStore.getState().version).toBe(3)
+    expect(useAppStore.getState().version).toBe(4)
     expect(useAppStore.getState().cards.every((card) => Array.isArray(card.checklist))).toBe(true)
     expect(useAppStore.getState().cards.every((card) => card.blockedBy.length === 0)).toBe(true)
 
     localStorage.setItem('relay:data', JSON.stringify({ state: legacy, version: 1 }))
     await useAppStore.persist.rehydrate()
-    expect(useAppStore.getState().version).toBe(3)
+    expect(useAppStore.getState().version).toBe(4)
     expect(useAppStore.getState().cards.every((card) => Array.isArray(card.checklist))).toBe(true)
   })
 
-  it('migrates v2 data to version 3 with empty blockers and drops unknown blocker ids', async () => {
+  it('migrates v2 data to version 4 with empty blockers and drops unknown blocker ids', async () => {
     const current = createSeedData()
     const v2 = {
       ...current,
       version: 2,
-      cards: current.cards.map(({ blockedBy: _blockedBy, ...card }) =>
+      cards: current.cards.map(({ blockedBy: _blockedBy, history: _history, ...card }) =>
         card.id === 'card-101' ? { ...card, blockedBy: ['card-105', 'missing', 'card-101'] } : card,
       ),
     }
     localStorage.setItem('relay:data', JSON.stringify({ state: v2, version: 2 }))
     await useAppStore.persist.rehydrate()
     const cards = useAppStore.getState().cards
-    expect(useAppStore.getState().version).toBe(3)
+    expect(useAppStore.getState().version).toBe(4)
     expect(cards.find((card) => card.id === 'card-101')?.blockedBy).toEqual(['card-105'])
     expect(cards.filter((card) => card.id !== 'card-101').every((card) => card.blockedBy.length === 0))
       .toBe(true)
@@ -456,6 +463,189 @@ describe('useAppStore', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('card history', () => {
+  const cardByTitle = (title: string) =>
+    useAppStore.getState().cards.find((card) => card.title === title)!
+
+  it('records each move and calculates cycle time from the first Doing entry', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const createdAt = '2026-10-01T09:00:00.000Z'
+    vi.setSystemTime(new Date(createdAt))
+    useAppStore.getState().updateSettings({ doingWipLimit: 0 })
+    useAppStore.getState().addCard({ title: 'History example', column: 'todo' })
+    const card = cardByTitle('History example')
+    expect(card.createdAt).toBe(createdAt)
+
+    vi.setSystemTime(new Date('2026-10-02T09:00:00.000Z'))
+    useAppStore.getState().moveCard(card.id, 'doing', 0)
+    vi.setSystemTime(new Date('2026-10-05T21:00:00.000Z'))
+    useAppStore.getState().moveCard(card.id, 'done', 0)
+    expect(cardByTitle('History example').history).toEqual([
+      { column: 'todo', enteredAt: createdAt },
+      { column: 'doing', enteredAt: '2026-10-02T09:00:00.000Z' },
+      { column: 'done', enteredAt: '2026-10-05T21:00:00.000Z' },
+    ])
+    expect(cardByTitle('History example').createdAt)
+      .toBe(cardByTitle('History example').history[0].enteredAt)
+    expect(cycleTimeDays(cardByTitle('History example'))).toBe(3.5)
+
+    vi.setSystemTime(new Date('2026-10-07T09:00:00.000Z'))
+    useAppStore.getState().moveCard(card.id, 'doing', 0)
+    expect(cardByTitle('History example').history).toHaveLength(4)
+    expect(cycleTimeDays(cardByTitle('History example'))).toBeNull()
+
+    vi.setSystemTime(new Date('2026-10-08T09:00:00.000Z'))
+    useAppStore.getState().moveCard(card.id, 'done', 0)
+    expect(cardByTitle('History example').history).toHaveLength(5)
+    expect(cycleTimeDays(cardByTitle('History example'))).toBe(6)
+  })
+
+  it('does not add an entry when reordering within a column', () => {
+    const before = useAppStore.getState().cards.find((card) => card.id === 'card-101')!
+    useAppStore.getState().moveCard('card-101', 'todo', 2)
+    expect(useAppStore.getState().cards.find((card) => card.id === 'card-101')?.history)
+      .toEqual(before.history)
+  })
+
+  it('leaves the whole card unchanged when WIP and blocker rules refuse moves', () => {
+    const beforeWip = useAppStore.getState().cards.find((card) => card.id === 'card-101')!
+    expect(useAppStore.getState().moveCard('card-101', 'doing', 0).ok).toBe(false)
+    expect(useAppStore.getState().updateCard('card-101', { column: 'doing' }).ok).toBe(false)
+    expect(useAppStore.getState().cards.find((card) => card.id === 'card-101')).toEqual(beforeWip)
+
+    const beforeBlocked = useAppStore.getState().cards.find((card) => card.id === 'card-102')!
+    expect(useAppStore.getState().moveCard('card-102', 'done', 0).ok).toBe(false)
+    expect(useAppStore.getState().updateCard('card-102', { column: 'done' }).ok).toBe(false)
+    expect(useAppStore.getState().cards.find((card) => card.id === 'card-102')).toEqual(beforeBlocked)
+  })
+
+  it('records Status-menu moves but ignores a supplied history patch', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-02T09:00:00.000Z'))
+    useAppStore.getState().updateSettings({ doingWipLimit: 0 })
+    const before = useAppStore.getState().cards.find((card) => card.id === 'card-101')!
+    useAppStore.getState().updateCard('card-101', { column: 'doing' })
+    const moved = useAppStore.getState().cards.find((card) => card.id === 'card-101')!
+    expect(moved.history).toEqual([
+      ...before.history,
+      { column: 'doing', enteredAt: '2026-10-02T09:00:00.000Z' },
+    ])
+
+    const pastLength = useAppStore.getState().past.length
+    useAppStore.getState().updateCard('card-101', { history: [] })
+    expect(useAppStore.getState().cards.find((card) => card.id === 'card-101')?.history)
+      .toEqual(moved.history)
+    expect(useAppStore.getState().past).toHaveLength(pastLength)
+
+    useAppStore.getState().updateCard('card-101', { title: 'x', history: [] })
+    expect(useAppStore.getState().cards.find((card) => card.id === 'card-101'))
+      .toMatchObject({ title: 'x', history: moved.history })
+  })
+
+  it('records checklist auto-moves to Done, Doing, and To do', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    useAppStore.getState().updateSettings({ doingWipLimit: 0 })
+    vi.setSystemTime(new Date('2026-10-01T09:00:00.000Z'))
+    useAppStore.getState().addCard({
+      title: 'Checklist history',
+      column: 'todo',
+      checklist: [{ id: 'history-check', text: 'Finish', done: false }],
+    })
+    const card = cardByTitle('Checklist history')
+
+    vi.setSystemTime(new Date('2026-10-02T09:00:00.000Z'))
+    useAppStore.getState().updateChecklistItem(card.id, 'history-check', { done: true })
+    expect(cardByTitle('Checklist history').history.at(-1))
+      .toEqual({ column: 'done', enteredAt: '2026-10-02T09:00:00.000Z' })
+
+    vi.setSystemTime(new Date('2026-10-03T09:00:00.000Z'))
+    expect(useAppStore.getState().updateChecklistItem(card.id, 'history-check', { done: false }))
+      .toMatchObject({ ok: true, autoMoved: 'doing' })
+    expect(cardByTitle('Checklist history').history.at(-1))
+      .toEqual({ column: 'doing', enteredAt: '2026-10-03T09:00:00.000Z' })
+
+    vi.setSystemTime(new Date('2026-10-04T09:00:00.000Z'))
+    useAppStore.getState().updateChecklistItem(card.id, 'history-check', { done: true })
+    useAppStore.getState().updateSettings({
+      doingWipLimit: useAppStore.getState().columnOrder.doing.length,
+    })
+    vi.setSystemTime(new Date('2026-10-05T09:00:00.000Z'))
+    expect(useAppStore.getState().updateChecklistItem(card.id, 'history-check', { done: false }))
+      .toMatchObject({ ok: true, autoMoved: 'todo' })
+    expect(cardByTitle('Checklist history').history.at(-1))
+      .toEqual({ column: 'todo', enteredAt: '2026-10-05T09:00:00.000Z' })
+  })
+
+  it('uses provided creation time and ignores provided history', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-02T09:00:00.000Z'))
+    useAppStore.getState().addCard({
+      title: 'Explicit creation',
+      column: 'todo',
+      createdAt: '2026-10-01T09:00:00.000Z',
+      history: [],
+    })
+    expect(cardByTitle('Explicit creation').history)
+      .toEqual([{ column: 'todo', enteredAt: '2026-10-01T09:00:00.000Z' }])
+    expect(cardByTitle('Explicit creation').createdAt).toBe('2026-10-01T09:00:00.000Z')
+  })
+
+  it('starts promoted request cards with a To do history entry', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const now = '2026-10-02T09:00:00.000Z'
+    vi.setSystemTime(new Date(now))
+    const requestId = useAppStore.getState().addRequest({ title: 'Promoted history' })
+    const cardId = useAppStore.getState().promoteRequest(requestId)
+    expect(useAppStore.getState().cards.find((card) => card.id === cardId)?.history)
+      .toEqual([{ column: 'todo', enteredAt: now }])
+  })
+
+  it('undoes and redoes a move with the original entry timestamp', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    useAppStore.getState().updateSettings({ doingWipLimit: 0 })
+    vi.setSystemTime(new Date('2026-10-01T09:00:00.000Z'))
+    useAppStore.getState().addCard({ title: 'Undo history', column: 'todo' })
+    const card = cardByTitle('Undo history')
+
+    vi.setSystemTime(new Date('2026-10-02T09:00:00.000Z'))
+    useAppStore.getState().moveCard(card.id, 'doing', 0)
+    const movedHistory = cardByTitle('Undo history').history
+    expect(useAppStore.getState().undo()).toContain('Move')
+    expect(cardByTitle('Undo history').history).toHaveLength(1)
+
+    vi.setSystemTime(new Date('2026-10-03T09:00:00.000Z'))
+    useAppStore.getState().redo()
+    expect(cardByTitle('Undo history').history).toEqual(movedHistory)
+    expect(cardByTitle('Undo history').history.at(-1)?.enteredAt)
+      .toBe('2026-10-02T09:00:00.000Z')
+  })
+
+  it('migrates version 3 imports and persisted data without card history', async () => {
+    const current = createSeedData()
+    const v3 = {
+      ...current,
+      version: 3,
+      cards: current.cards.map(({ history: _history, ...card }) => card),
+    }
+    expect(useAppStore.getState().importData(JSON.stringify(v3))).toEqual({ ok: true })
+    expect(useAppStore.getState().version).toBe(4)
+    expect(useAppStore.getState().cards.every((card) =>
+      card.history.length === 1 &&
+      card.history[0].column === card.column &&
+      card.history[0].enteredAt === card.updatedAt,
+    )).toBe(true)
+
+    localStorage.setItem('relay:data', JSON.stringify({ state: v3, version: 3 }))
+    await useAppStore.persist.rehydrate()
+    expect(useAppStore.getState().version).toBe(4)
+    expect(useAppStore.getState().cards.every((card) =>
+      card.history.length === 1 &&
+      card.history[0].column === card.column &&
+      card.history[0].enteredAt === card.updatedAt,
+    )).toBe(true)
   })
 })
 

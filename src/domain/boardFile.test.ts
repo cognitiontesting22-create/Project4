@@ -54,6 +54,29 @@ describe('board file format', () => {
     })
   })
 
+  it('backfills missing history and rejects malformed history', () => {
+    const legacy = boardData()
+    delete legacy.cards[0].history
+    const backfilled = parse(legacy)
+    expect(backfilled.ok && backfilled.cards[0].history).toEqual([
+      { column: 'todo', enteredAt: seed.cards[0].updatedAt },
+    ])
+
+    const invalidHistories = [
+      [],
+      [{ column: 'later', enteredAt: '2026-10-01T09:00:00.000Z' }],
+      [{ column: 'doing', enteredAt: '2026-10-01T09:00:00.000Z' }],
+    ]
+    for (const history of invalidHistories) {
+      const invalid = boardData()
+      invalid.cards[0].history = history
+      expect(parse(invalid)).toEqual({
+        ok: false,
+        reason: "Card 1 ('Harden webhook retry handling') has an invalid history",
+      })
+    }
+  })
+
   it('drops blocker links to missing cards, self links, and links that would form a cycle', () => {
     const data = boardData()
     data.cards[0].blockedBy = ['card-gone', 'card-101', 'card-105']

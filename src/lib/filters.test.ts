@@ -17,6 +17,7 @@ const card = (id: string, labels: string[]): Card => ({
   blocked: false,
   blockedReason: '',
   blockedBy: [],
+  history: [{ column: 'todo', enteredAt: '' }],
   comments: [],
   checklist: [],
   requestId: null,

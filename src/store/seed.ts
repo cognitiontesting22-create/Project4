@@ -256,8 +256,26 @@ const cards: Card[] = ([
     createdAt: ago(20),
     updatedAt: ago(6),
   },
-] satisfies Omit<Card, 'checklist' | 'blockedBy'>[]).map((card) => ({
+] satisfies Omit<Card, 'checklist' | 'blockedBy' | 'history'>[]).map((card) => ({
   ...card,
+  history:
+    card.column === 'todo'
+      ? [{ column: 'todo' as const, enteredAt: card.createdAt }]
+      : card.column === 'doing'
+        ? [
+            { column: 'todo' as const, enteredAt: card.createdAt },
+            { column: 'doing' as const, enteredAt: card.updatedAt },
+          ]
+        : [
+            { column: 'todo' as const, enteredAt: card.createdAt },
+            {
+              column: 'doing' as const,
+              enteredAt: new Date(
+                (Date.parse(card.createdAt) + Date.parse(card.updatedAt)) / 2,
+              ).toISOString(),
+            },
+            { column: 'done' as const, enteredAt: card.updatedAt },
+          ],
   blockedBy:
     card.id === 'card-102' ? ['card-106'] : card.id === 'card-104' ? ['card-110'] : [],
   checklist:
@@ -434,7 +452,7 @@ const activity: Activity[] = [
 
 export function createSeedData(): AppData {
   return {
-    version: 3,
+    version: 4,
     members,
     currentUserId: 'elena',
     cards,

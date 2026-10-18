@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 import { ACTIVE_STATUSES, parseMentions, votesUsed } from '../domain/scoring'
 import { uid } from '../domain/ids'
+import { backfillHistory, isValidHistory } from '../domain/history'
 import { normalizeLabels } from '../lib/filters'
 import { wipBlockReason } from '../domain/wip'
 import {
@@ -107,6 +108,7 @@ export const useAppStore = create<AppStore>()(
         if (reason) return { ok: false, reason }
 
         const now = new Date().toISOString()
+        const createdAt = input.createdAt ?? now
         const id = input.id ?? uid('card')
         const blockers = requestedBlockers(state.cards, input.blockedBy ?? [], id)
         const linkReason = blockers.flatMap((blockerId) => blockerLinkReason(state.cards, id, blockerId) ?? [])[0]
@@ -133,8 +135,9 @@ export const useAppStore = create<AppStore>()(
           comments: input.comments ?? [],
           checklist: input.checklist ?? [],
           requestId: input.requestId ?? null,
-          createdAt: input.createdAt ?? now,
+          createdAt,
           updatedAt: now,
+          history: [{ column: input.column, enteredAt: createdAt }],
         }
 
         set((current) => ({
@@ -174,6 +177,8 @@ export const useAppStore = create<AppStore>()(
           ...(patch.labels ? { labels: normalizeLabels(patch.labels) } : {}),
           ...(blockedBy ? { blockedBy } : {}),
         }
+        delete normalizedPatch.id
+        delete normalizedPatch.history
         const destination = normalizedPatch.column ?? card.column
         const reason =
           destination === 'doing' && card.column !== 'doing'
@@ -184,7 +189,6 @@ export const useAppStore = create<AppStore>()(
         if (reason) return { ok: false, reason }
 
         const detailPatch = { ...normalizedPatch }
-        delete detailPatch.id
         delete detailPatch.column
         delete detailPatch.createdAt
         delete detailPatch.updatedAt
@@ -762,6 +766,7 @@ export const useAppStore = create<AppStore>()(
           requestId: request.id,
           createdAt: now,
           updatedAt: now,
+          history: [{ column: 'todo', enteredAt: now }],
         }
 
         set((current) => ({
@@ -885,7 +890,7 @@ export const useAppStore = create<AppStore>()(
           return { ok: false, reason: 'Invalid JSON.' }
         }
         const data = migrateWorkspaceData(parsed)
-        if (!data) return { ok: false, reason: 'Import must be Relay data version 1, 2 or 3.' }
+        if (!data) return { ok: false, reason: 'Import must be Relay data version 1, 2, 3 or 4.' }
         set((state) => ({
           ...data,
           ...recordHistory(state, 'Import data'),
@@ -923,11 +928,11 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'relay:data',
-      version: 3,
+      version: 4,
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => toAppData(state),
       migrate: (persistedState, version) =>
-        version < 3
+        version < 4
           ? migrateWorkspaceData(persistedState) ?? createSeedData()
           : (persistedState as AppData),
       merge: (persistedState, currentState) => {
@@ -1009,7 +1014,12 @@ function cardMoveChanges(
   columnOrder[to] = destination
 
   const moved = card.column !== to
-  const updatedCard = { ...card, column: to, updatedAt: now }
+  const updatedCard = {
+    ...card,
+    column: to,
+    updatedAt: now,
+    ...(moved ? { history: [...card.history, { column: to, enteredAt: now }] } : {}),
+  }
   const activities: Activity[] = []
   if (moved) {
     activities.push(
@@ -1151,9 +1161,13 @@ function columnTitle(column: ColumnId): string {
 }
 
 type LegacyAppData = Omit<AppData, 'version' | 'cards'> & {
-  version: 1 | 2
+  version: 1 | 2 | 3 | 4
   cards: Array<
-    Omit<Card, 'checklist' | 'blockedBy'> & { checklist?: ChecklistItem[]; blockedBy?: unknown }
+    Omit<Card, 'checklist' | 'blockedBy' | 'history'> & {
+      checklist?: ChecklistItem[]
+      blockedBy?: unknown
+      history?: unknown
+    }
   >
 }
 
@@ -1163,9 +1177,12 @@ function migrateWorkspaceData(value: unknown): AppData | null {
   const ids = new Set(data.cards.map((card) => card.id))
   return {
     ...data,
-    version: 3,
+    version: 4,
     cards: data.cards.map((card) => ({
       ...card,
+      history: isValidHistory(card.history, card.column)
+        ? card.history
+        : backfillHistory(card),
       checklist: Array.isArray(card.checklist) ? card.checklist : [],
       blockedBy: normalizeBlockedBy(
         Array.isArray(card.blockedBy)
@@ -1182,7 +1199,7 @@ function isAppData(value: unknown): value is AppData | LegacyAppData {
   if (typeof value !== 'object' || value === null) return false
   const data = value as Record<string, unknown>
   return (
-    (data.version === 1 || data.version === 2 || data.version === 3) &&
+    (data.version === 1 || data.version === 2 || data.version === 3 || data.version === 4) &&
     Array.isArray(data.members) &&
     Array.isArray(data.cards) &&
     Array.isArray(data.requests) &&

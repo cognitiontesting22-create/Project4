@@ -1,4 +1,5 @@
 import type { AppData, Card, CardType, ColumnId, Priority } from './types'
+import { backfillHistory, isValidHistory } from './history'
 import { normalizeLabels } from '../lib/filters'
 import { blockerLinkReason } from './dependencies'
 
@@ -248,6 +249,14 @@ function parseCard(
   }
   if (typeof value.createdAt !== 'string') return fail('has an invalid createdAt')
   if (typeof value.updatedAt !== 'string') return fail('has an invalid updatedAt')
+  const history =
+    value.history === undefined
+      ? backfillHistory({
+          column: value.column as ColumnId,
+          updatedAt: value.updatedAt,
+        })
+      : value.history
+  if (!isValidHistory(history, value.column as ColumnId)) return fail('has an invalid history')
 
   const unassigned = typeof value.assigneeId === 'string' && !members.has(value.assigneeId)
   return {
@@ -270,6 +279,7 @@ function parseCard(
       blockedBy: (value.blockedBy as string[] | undefined) ?? [],
       comments: value.comments as Card['comments'],
       checklist: value.checklist as Card['checklist'],
+      history,
       requestId:
         typeof value.requestId === 'string' && requests.has(value.requestId)
           ? value.requestId

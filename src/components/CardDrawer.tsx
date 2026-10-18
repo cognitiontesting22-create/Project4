@@ -1,5 +1,6 @@
 import { ArrowUpRight, Trash, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
+import { cycleTimeDays, formatDays, timeInColumnDays } from '../domain/history'
 import { COLUMNS, type Card, type CardType, type ChecklistItem, type ColumnId, type Priority } from '../domain/types'
 import { wipBlockReason } from '../domain/wip'
 import { dependencyBlockReason, openBlockers } from '../domain/dependencies'
@@ -123,6 +124,7 @@ export function CardDrawer() {
   const doneBlockers = card?.column === 'done' ? [] : openBlockers(cards, draft.blockedBy)
   const doneBlockReason = card?.column === 'done' ? null : dependencyBlockReason(cards, draft.blockedBy)
   const blocks = card ? cards.filter((item) => item.blockedBy.includes(card.id)) : []
+  const cycleDays = card ? cycleTimeDays(card) : null
 
   const save = () => {
     if (!draft.title.trim()) return
@@ -316,6 +318,19 @@ export function CardDrawer() {
             )}
             {doneBlockReason && (
               <span className="mt-1 block text-xs text-rose-600">{doneBlockReason}</span>
+            )}
+            {card && (
+              <>
+                <span className="mt-1 block text-xs text-slate-500">
+                  In {COLUMNS.find((column) => column.id === card.column)?.title ?? card.column} for{' '}
+                  {formatDays(timeInColumnDays(card, new Date()))}
+                </span>
+                {cycleDays !== null && (
+                  <span className="mt-1 block text-xs text-slate-500">
+                    Cycle time {formatDays(cycleDays)}
+                  </span>
+                )}
+              </>
             )}
           </Field>
           <Field label="Type">
