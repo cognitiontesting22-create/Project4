@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import type { Card } from './types'
 import { createSeedData } from '../store/seed'
 import { parseBoardFile, serializeBoard } from './boardFile'
+import { backfillHistory } from './history'
 
 const seed = createSeedData()
 const context = {
@@ -51,6 +53,130 @@ describe('board file format', () => {
     expect(parse(data)).toEqual({
       ok: false,
       reason: "Card 1 ('Harden webhook retry handling') has an invalid blocked-by list",
+    })
+  })
+
+  it('imports legacy board files without history or archivedAt using rebuilt histories', () => {
+    const legacy = boardData()
+    for (const card of legacy.cards) {
+      delete card.history
+      delete card.archivedAt
+    }
+    const backfilled = parse(legacy)
+    expect(backfilled.ok).toBe(true)
+    if (backfilled.ok) {
+      for (const source of legacy.cards) {
+        const card = backfilled.cards.find((item) => item.id === source.id)!
+        expect(card.history).toEqual(
+          backfillHistory({
+            column: source.column as Card['column'],
+            createdAt: source.createdAt as string,
+            updatedAt: source.updatedAt as string,
+          }),
+        )
+        expect(card.archivedAt).toBeNull()
+      }
+    }
+  })
+
+  it.each([
+    ['non-array history', 'not an array'],
+    ['empty history', []],
+    ['history with an invalid column', [{ column: 'later', enteredAt: '2026-10-01T09:00:00.000Z' }]],
+    ['history with an unparseable timestamp', [{ column: 'todo', enteredAt: 'not a date' }]],
+    ['history whose last column mismatches', [{ column: 'doing', enteredAt: '2026-10-01T09:00:00.000Z' }]],
+  ])('returns "has an invalid history" for %s', (_case, history) => {
+    const invalid = boardData()
+    invalid.cards[1].title = 'Fix login redirect'
+    invalid.cards[1].history = history
+    expect(parse(invalid)).toEqual({
+      ok: false,
+      reason: "Card 2 ('Fix login redirect') has an invalid history",
+    })
+  })
+
+  it('round trips an archived card outside column order and imports legacy missing fields', () => {
+    const archivedCard = seed.cards.find((card) => card.column === 'done')!
+    const cards = seed.cards.map((card) =>
+      card.id === archivedCard.id
+        ? { ...card, archivedAt: '2026-10-20T12:00:00.000Z' }
+        : card,
+    )
+    const columnOrder = {
+      ...seed.columnOrder,
+      done: seed.columnOrder.done.filter((id) => id !== archivedCard.id),
+    }
+    const result = parseBoardFile(serializeBoard({ cards, columnOrder }), context)
+
+    expect(result).toMatchObject({ ok: true, columnOrder })
+    if (result.ok) {
+      expect(result.cards).toHaveLength(seed.cards.length)
+      expect(result.cards.find((card) => card.id === archivedCard.id)?.archivedAt)
+        .toBe('2026-10-20T12:00:00.000Z')
+      expect(result.columnOrder.done).not.toContain(archivedCard.id)
+    }
+
+    const legacy = boardData()
+    for (const card of legacy.cards) {
+      delete card.archivedAt
+      delete card.history
+    }
+    const backfilled = parse(legacy)
+    expect(backfilled.ok).toBe(true)
+    if (backfilled.ok) {
+      expect(backfilled.cards.every((card) => card.archivedAt === null)).toBe(true)
+      for (const source of legacy.cards) {
+        const card = backfilled.cards.find((item) => item.id === source.id)!
+        expect(card.history).toEqual(
+          backfillHistory({
+            column: source.column as Card['column'],
+            createdAt: source.createdAt as string,
+            updatedAt: source.updatedAt as string,
+          }),
+        )
+      }
+    }
+  })
+
+  it('rejects an archive key in the column order', () => {
+    expect(parse({
+      ...boardData(),
+      columnOrder: { todo: [], doing: [], done: [], archive: [] },
+    })).toEqual({
+      ok: false,
+      reason: 'Column order must contain exactly todo, doing, and done as string arrays.',
+    })
+  })
+
+  it.each([
+    ['number timestamp', 42],
+    ['object timestamp', {}],
+    ['unparseable timestamp string', 'not a date'],
+  ])('returns "has an invalid archived time" for a %s', (_case, archivedAt) => {
+    const invalid = boardData()
+    invalid.cards[0].archivedAt = archivedAt
+    expect(parse(invalid)).toEqual({
+      ok: false,
+      reason: "Card 1 ('Harden webhook retry handling') has an invalid archived time",
+    })
+  })
+
+  it('returns "is archived but not in Done" for an archived non-Done card', () => {
+    const notDone = boardData()
+    notDone.cards[0].archivedAt = '2026-10-20T12:00:00.000Z'
+    expect(parse(notDone)).toEqual({
+      ok: false,
+      reason: "Card 1 ('Harden webhook retry handling') is archived but not in Done",
+    })
+  })
+
+  it('returns "is archived but listed in column order" for a listed archived card', () => {
+    const listed = boardData()
+    const archivedCard = listed.cards.find((card) => card.column === 'done')!
+    archivedCard.archivedAt = '2026-10-20T12:00:00.000Z'
+    expect(parse(listed)).toEqual({
+      ok: false,
+      reason: `Card ${listed.cards.indexOf(archivedCard) + 1} ('${archivedCard.title}') is archived but listed in column order`,
     })
   })
 

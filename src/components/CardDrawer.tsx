@@ -1,11 +1,13 @@
-import { ArrowUpRight, Trash, X } from 'lucide-react'
+import { Archive, ArrowUpRight, Trash, X } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
+import { cycleTimeDays, formatDays, timeInColumnDays } from '../domain/history'
 import { COLUMNS, type Card, type CardType, type ChecklistItem, type ColumnId, type Priority } from '../domain/types'
 import { wipBlockReason } from '../domain/wip'
 import { dependencyBlockReason, openBlockers } from '../domain/dependencies'
 import { btnDanger, btnPrimary, btnSecondary, inputCls, PRIORITY_META, relativeTime, TYPE_META } from '../lib/meta'
 import { normalizeLabels } from '../lib/filters'
 import { useToastStore } from '../lib/toast'
+import { undoWithToast } from '../lib/undo'
 import { useUiStore } from '../lib/ui-store'
 import { useAppStore } from '../store/useAppStore'
 import { BlockerPicker } from './BlockerPicker'
@@ -56,6 +58,7 @@ export function CardDrawer() {
     addCard,
     updateCard,
     deleteCard,
+    archiveCard,
     addComment,
     addChecklistItem,
     updateChecklistItem,
@@ -115,7 +118,7 @@ export function CardDrawer() {
   }
   const linkedRequest = card?.requestId ? requests.find((r) => r.id === card.requestId) : undefined
   const reporter = card ? members.find((m) => m.id === card.reporterId) : undefined
-  const doingCount = cards.filter((item) => item.column === 'doing').length
+  const doingCount = cards.filter((item) => item.column === 'doing' && !item.archivedAt).length
   const wipLimit = settings.doingWipLimit
   const doingFull = wipLimit > 0 && doingCount >= wipLimit
   const blockReason = wipBlockReason({ cards, settings }, card?.id ?? null)
@@ -123,6 +126,7 @@ export function CardDrawer() {
   const doneBlockers = card?.column === 'done' ? [] : openBlockers(cards, draft.blockedBy)
   const doneBlockReason = card?.column === 'done' ? null : dependencyBlockReason(cards, draft.blockedBy)
   const blocks = card ? cards.filter((item) => item.blockedBy.includes(card.id)) : []
+  const cycleDays = card ? cycleTimeDays(card) : null
 
   const save = () => {
     if (!draft.title.trim()) return
@@ -254,10 +258,33 @@ export function CardDrawer() {
                 </button>
               </>
             ) : (
-              <button className={btnDanger} onClick={() => setConfirmDelete(true)}>
-                <Trash className="h-4 w-4" />
-                Delete
-              </button>
+              <>
+                {card.column === 'done' && card.archivedAt === null && (
+                  <button
+                    className={btnSecondary}
+                    onClick={() => {
+                      const result = archiveCard(card.id)
+                      if (result.ok) {
+                        close()
+                        showToast({
+                          message: `Archived '${card.title}'`,
+                          variant: 'info',
+                          action: { label: 'Undo', onClick: undoWithToast },
+                        })
+                      } else {
+                        showToast({ message: result.reason, variant: 'error' })
+                      }
+                    }}
+                  >
+                    <Archive className="h-4 w-4" />
+                    Archive
+                  </button>
+                )}
+                <button className={btnDanger} onClick={() => setConfirmDelete(true)}>
+                  <Trash className="h-4 w-4" />
+                  Delete
+                </button>
+              </>
             ))}
           <div className="ml-auto flex gap-2">
             <button className={btnSecondary} onClick={close}>
@@ -316,6 +343,19 @@ export function CardDrawer() {
             )}
             {doneBlockReason && (
               <span className="mt-1 block text-xs text-rose-600">{doneBlockReason}</span>
+            )}
+            {card && (
+              <>
+                <span className="mt-1 block text-xs text-slate-500">
+                  In {COLUMNS.find((column) => column.id === card.column)?.title ?? card.column} for{' '}
+                  {formatDays(timeInColumnDays(card, new Date()))}
+                </span>
+                {cycleDays !== null && (
+                  <span className="mt-1 block text-xs text-slate-500">
+                    Cycle time {formatDays(cycleDays)}
+                  </span>
+                )}
+              </>
             )}
           </Field>
           <Field label="Type">

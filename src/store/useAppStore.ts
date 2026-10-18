@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 import { ACTIVE_STATUSES, parseMentions, votesUsed } from '../domain/scoring'
 import { uid } from '../domain/ids'
+import { cardsToArchive } from '../domain/archive'
+import { backfillHistory, isValidHistory } from '../domain/history'
 import { normalizeLabels } from '../lib/filters'
 import { wipBlockReason } from '../domain/wip'
 import {
@@ -52,6 +54,9 @@ interface AppActions {
   updateCard: (id: string, patch: Partial<Card>) => ActionResult
   deleteCard: (id: string) => void
   moveCard: (id: string, to: ColumnId, toIndex: number) => ActionResult
+  archiveCard: (id: string) => ActionResult
+  restoreCard: (id: string) => ActionResult
+  archiveOldDoneCards: () => number
   addComment: (target: 'card' | 'request', id: string, body: string) => void
   addRequest: (input: Partial<FeatureRequest> & { title: string }) => string
   updateRequest: (id: string, patch: Partial<FeatureRequest>) => void
@@ -107,6 +112,7 @@ export const useAppStore = create<AppStore>()(
         if (reason) return { ok: false, reason }
 
         const now = new Date().toISOString()
+        const createdAt = input.createdAt ?? now
         const id = input.id ?? uid('card')
         const blockers = requestedBlockers(state.cards, input.blockedBy ?? [], id)
         const linkReason = blockers.flatMap((blockerId) => blockerLinkReason(state.cards, id, blockerId) ?? [])[0]
@@ -133,8 +139,10 @@ export const useAppStore = create<AppStore>()(
           comments: input.comments ?? [],
           checklist: input.checklist ?? [],
           requestId: input.requestId ?? null,
-          createdAt: input.createdAt ?? now,
+          createdAt,
           updatedAt: now,
+          history: [{ column: input.column, enteredAt: createdAt }],
+          archivedAt: null,
         }
 
         set((current) => ({
@@ -159,6 +167,13 @@ export const useAppStore = create<AppStore>()(
         const state = get()
         const card = state.cards.find((item) => item.id === id)
         if (!card) return { ok: true }
+        if (
+          card.archivedAt !== null &&
+          patch.column !== undefined &&
+          patch.column !== card.column
+        ) {
+          return { ok: false, reason: 'Restore this card before moving it.' }
+        }
         let blockedBy: string[] | undefined
         if (patch.blockedBy) {
           const blockers = requestedBlockers(state.cards, patch.blockedBy, id)
@@ -174,6 +189,9 @@ export const useAppStore = create<AppStore>()(
           ...(patch.labels ? { labels: normalizeLabels(patch.labels) } : {}),
           ...(blockedBy ? { blockedBy } : {}),
         }
+        delete normalizedPatch.id
+        delete normalizedPatch.history
+        delete normalizedPatch.archivedAt
         const destination = normalizedPatch.column ?? card.column
         const reason =
           destination === 'doing' && card.column !== 'doing'
@@ -184,7 +202,6 @@ export const useAppStore = create<AppStore>()(
         if (reason) return { ok: false, reason }
 
         const detailPatch = { ...normalizedPatch }
-        delete detailPatch.id
         delete detailPatch.column
         delete detailPatch.createdAt
         delete detailPatch.updatedAt
@@ -296,9 +313,11 @@ export const useAppStore = create<AppStore>()(
         const checklist = card.checklist.map((entry) =>
           entry.id === itemId ? { ...entry, text, done } : entry,
         )
-        const completes = patch.done === true && !item.done &&
+        const completes = card.archivedAt === null &&
+          patch.done === true && !item.done &&
           card.column !== 'done' && checklist.length > 0 && checklist.every((entry) => entry.done)
-        const reopens = patch.done === false && item.done &&
+        const reopens = card.archivedAt === null &&
+          patch.done === false && item.done &&
           card.column === 'done' && card.checklist.length > 0 &&
           card.checklist.every((entry) => entry.done)
         const blockedReason = reopens
@@ -484,6 +503,9 @@ export const useAppStore = create<AppStore>()(
         const state = get()
         const card = state.cards.find((item) => item.id === id)
         if (!card) return { ok: true }
+        if (card.archivedAt !== null) {
+          return { ok: false, reason: 'Restore this card before moving it.' }
+        }
         const reason =
           to === 'doing' && card.column !== 'doing'
             ? wipBlockReason(state, id)
@@ -503,6 +525,109 @@ export const useAppStore = create<AppStore>()(
           ...movement,
         }))
         return { ok: true }
+      },
+
+      archiveCard: (id) => {
+        const state = get()
+        const card = state.cards.find((item) => item.id === id)
+        if (!card) return { ok: true }
+        if (card.archivedAt !== null) {
+          return { ok: false, reason: 'This card is already archived.' }
+        }
+        if (card.column !== 'done') {
+          return { ok: false, reason: 'Only Done cards can be archived.' }
+        }
+
+        const now = new Date().toISOString()
+        set((current) => ({
+          ...recordHistory(current, `Archive '${card.title}'`),
+          cards: current.cards.map((item) =>
+            item.id === id ? { ...item, archivedAt: now, updatedAt: now } : item,
+          ),
+          columnOrder: {
+            ...current.columnOrder,
+            done: current.columnOrder.done.filter((cardId) => cardId !== id),
+          },
+          activity: addActivity(
+            current.activity,
+            makeActivity(current, {
+              kind: 'card_archived',
+              targetType: 'card',
+              targetId: card.id,
+              targetTitle: card.title,
+              detail: 'archived the card',
+              createdAt: now,
+            }),
+          ),
+        }))
+        return { ok: true }
+      },
+
+      restoreCard: (id) => {
+        const state = get()
+        const card = state.cards.find((item) => item.id === id)
+        if (!card) return { ok: true }
+        if (card.archivedAt === null) {
+          return { ok: false, reason: 'This card is not archived.' }
+        }
+
+        const now = new Date().toISOString()
+        set((current) => ({
+          ...recordHistory(current, `Restore '${card.title}'`),
+          cards: current.cards.map((item) =>
+            item.id === id ? { ...item, archivedAt: null, updatedAt: now } : item,
+          ),
+          columnOrder: {
+            ...current.columnOrder,
+            done: [id, ...current.columnOrder.done.filter((cardId) => cardId !== id)],
+          },
+          activity: addActivity(
+            current.activity,
+            makeActivity(current, {
+              kind: 'card_restored',
+              targetType: 'card',
+              targetId: card.id,
+              targetTitle: card.title,
+              detail: 'restored the card to Done',
+              createdAt: now,
+            }),
+          ),
+        }))
+        return { ok: true }
+      },
+
+      archiveOldDoneCards: () => {
+        const state = get()
+        const now = new Date()
+        const cards = cardsToArchive(state.cards, state.settings.archiveAfterDays, now)
+        if (!cards.length) return 0
+
+        const ids = new Set(cards.map((card) => card.id))
+        const archivedAt = now.toISOString()
+        set((current) => ({
+          ...recordHistory(current, `Archive ${cards.length} Done cards`),
+          cards: current.cards.map((card) =>
+            ids.has(card.id) ? { ...card, archivedAt, updatedAt: archivedAt } : card,
+          ),
+          columnOrder: {
+            ...current.columnOrder,
+            done: current.columnOrder.done.filter((id) => !ids.has(id)),
+          },
+          activity: addActivities(
+            current.activity,
+            cards.map((card) =>
+              makeActivity(current, {
+                kind: 'card_archived',
+                targetType: 'card',
+                targetId: card.id,
+                targetTitle: card.title,
+                detail: 'archived the card',
+                createdAt: archivedAt,
+              }),
+            ),
+          ),
+        }))
+        return cards.length
       },
 
       addComment: (target, id, body) => {
@@ -762,6 +887,8 @@ export const useAppStore = create<AppStore>()(
           requestId: request.id,
           createdAt: now,
           updatedAt: now,
+          history: [{ column: 'todo', enteredAt: now }],
+          archivedAt: null,
         }
 
         set((current) => ({
@@ -885,7 +1012,7 @@ export const useAppStore = create<AppStore>()(
           return { ok: false, reason: 'Invalid JSON.' }
         }
         const data = migrateWorkspaceData(parsed)
-        if (!data) return { ok: false, reason: 'Import must be Relay data version 1, 2 or 3.' }
+        if (!data) return { ok: false, reason: 'Import must be Relay data version 1, 2, 3 or 4.' }
         set((state) => ({
           ...data,
           ...recordHistory(state, 'Import data'),
@@ -923,11 +1050,11 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'relay:data',
-      version: 3,
+      version: 4,
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => toAppData(state),
       migrate: (persistedState, version) =>
-        version < 3
+        version < 4
           ? migrateWorkspaceData(persistedState) ?? createSeedData()
           : (persistedState as AppData),
       merge: (persistedState, currentState) => {
@@ -946,6 +1073,10 @@ export const useAppStore = create<AppStore>()(
                   oldSettings.doingWipLimit ??
                   wipLimitDoing ??
                   currentState.settings.doingWipLimit,
+                archiveAfterDays:
+                  oldSettings.archiveAfterDays ?? currentState.settings.archiveAfterDays,
+                staleAfterDays:
+                  oldSettings.staleAfterDays ?? currentState.settings.staleAfterDays,
               }
             : currentState.settings,
           past: currentState.past,
@@ -1009,7 +1140,12 @@ function cardMoveChanges(
   columnOrder[to] = destination
 
   const moved = card.column !== to
-  const updatedCard = { ...card, column: to, updatedAt: now }
+  const updatedCard = {
+    ...card,
+    column: to,
+    updatedAt: now,
+    ...(moved ? { history: [...card.history, { column: to, enteredAt: now }] } : {}),
+  }
   const activities: Activity[] = []
   if (moved) {
     activities.push(
@@ -1150,11 +1286,20 @@ function columnTitle(column: ColumnId): string {
   return column === 'todo' ? 'To do' : column === 'doing' ? 'Doing' : 'Done'
 }
 
-type LegacyAppData = Omit<AppData, 'version' | 'cards'> & {
-  version: 1 | 2
+type LegacyAppData = Omit<AppData, 'version' | 'cards' | 'settings'> & {
+  version: 1 | 2 | 3 | 4
   cards: Array<
-    Omit<Card, 'checklist' | 'blockedBy'> & { checklist?: ChecklistItem[]; blockedBy?: unknown }
+    Omit<Card, 'checklist' | 'blockedBy' | 'history' | 'archivedAt'> & {
+      checklist?: ChecklistItem[]
+      blockedBy?: unknown
+      history?: unknown
+      archivedAt?: unknown
+    }
   >
+  settings: Omit<Settings, 'archiveAfterDays' | 'staleAfterDays'> & {
+    archiveAfterDays?: unknown
+    staleAfterDays?: unknown
+  }
 }
 
 function migrateWorkspaceData(value: unknown): AppData | null {
@@ -1163,9 +1308,33 @@ function migrateWorkspaceData(value: unknown): AppData | null {
   const ids = new Set(data.cards.map((card) => card.id))
   return {
     ...data,
-    version: 3,
+    version: 4,
+    settings: {
+      ...data.settings,
+      archiveAfterDays:
+        typeof data.settings.archiveAfterDays === 'number' &&
+        Number.isInteger(data.settings.archiveAfterDays) &&
+        data.settings.archiveAfterDays >= 1 &&
+        data.settings.archiveAfterDays <= 365
+          ? data.settings.archiveAfterDays
+          : 14,
+      staleAfterDays:
+        typeof data.settings.staleAfterDays === 'number' &&
+        Number.isInteger(data.settings.staleAfterDays) &&
+        data.settings.staleAfterDays >= 1 &&
+        data.settings.staleAfterDays <= 60
+          ? data.settings.staleAfterDays
+          : 5,
+    },
     cards: data.cards.map((card) => ({
       ...card,
+      history: isValidHistory(card.history, card.column)
+        ? card.history
+        : backfillHistory(card),
+      archivedAt:
+        typeof card.archivedAt === 'string' && Number.isFinite(Date.parse(card.archivedAt))
+          ? card.archivedAt
+          : null,
       checklist: Array.isArray(card.checklist) ? card.checklist : [],
       blockedBy: normalizeBlockedBy(
         Array.isArray(card.blockedBy)
@@ -1182,7 +1351,7 @@ function isAppData(value: unknown): value is AppData | LegacyAppData {
   if (typeof value !== 'object' || value === null) return false
   const data = value as Record<string, unknown>
   return (
-    (data.version === 1 || data.version === 2 || data.version === 3) &&
+    (data.version === 1 || data.version === 2 || data.version === 3 || data.version === 4) &&
     Array.isArray(data.members) &&
     Array.isArray(data.cards) &&
     Array.isArray(data.requests) &&

@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import { ChevronsUpDown, Inbox, Kanban, Settings, Trophy, type LucideIcon } from 'lucide-react'
+import { Archive, ChevronsUpDown, Inbox, Kanban, Settings, Trophy, type LucideIcon } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { isRelevantTo } from '../lib/inbox'
 import { ROLE_META } from '../lib/meta'
@@ -11,6 +11,7 @@ const NAV: { view: View; label: string; icon: LucideIcon }[] = [
   { view: 'board', label: 'Board', icon: Kanban },
   { view: 'requests', label: 'Feature requests', icon: Trophy },
   { view: 'inbox', label: 'Inbox', icon: Inbox },
+  { view: 'archive', label: 'Archive', icon: Archive },
   { view: 'settings', label: 'Settings', icon: Settings },
 ]
 

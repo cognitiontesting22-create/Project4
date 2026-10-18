@@ -11,6 +11,11 @@ export interface Member {
 
 export type ColumnId = 'todo' | 'doing' | 'done'
 
+export interface CardHistoryEntry {
+  column: ColumnId
+  enteredAt: string
+}
+
 export const COLUMNS: { id: ColumnId; title: string }[] = [
   { id: 'todo', title: 'To do' },
   { id: 'doing', title: 'Doing' },
@@ -48,6 +53,8 @@ export interface Card {
   blocked: boolean
   blockedReason: string
   blockedBy: string[] // ids of cards that must be Done before this one can move to Done
+  history: CardHistoryEntry[] // oldest first; last entry matches column
+  archivedAt: string | null
   comments: Comment[]
   checklist: ChecklistItem[]
   requestId: string | null // feature request this card was promoted from
@@ -80,6 +87,8 @@ export interface FeatureRequest {
 
 export type ActivityKind =
   | 'card_created'
+  | 'card_archived'
+  | 'card_restored'
   | 'card_moved'
   | 'card_updated'
   | 'card_deleted'
@@ -109,13 +118,15 @@ export interface ScoringWeights {
 
 export interface Settings {
   doingWipLimit: number // 0 = no limit
+  archiveAfterDays: number
+  staleAfterDays: number
   voteBudget: number // points per member across active (open|planned) requests
   maxVotesPerRequest: number
   weights: ScoringWeights
 }
 
 export interface AppData {
-  version: 3
+  version: 4
   members: Member[]
   currentUserId: string
   cards: Card[]

@@ -4,33 +4,14 @@ import { CardDrawer } from './components/CardDrawer'
 import { RequestDrawer } from './components/RequestDrawer'
 import { Sidebar } from './components/Sidebar'
 import { Toaster } from './components/Toaster'
-import { useToastStore } from './lib/toast'
+import { redoWithToast, undoWithToast } from './lib/undo'
 import { useUiStore } from './lib/ui-store'
 import { canRedo, canUndo, useAppStore } from './store/useAppStore'
 import { BoardView, KeyboardShortcutsDialog } from './views/BoardView'
+import { ArchiveView } from './views/ArchiveView'
 import { InboxView } from './views/InboxView'
 import { RequestsView } from './views/RequestsView'
 import { SettingsView } from './views/SettingsView'
-
-function undoWithToast() {
-  const label = useAppStore.getState().undo()
-  if (!label) return
-  useToastStore.getState().showToast({
-    message: `Undid: ${label}`,
-    variant: 'info',
-    action: { label: 'Redo', onClick: redoWithToast },
-  })
-}
-
-function redoWithToast() {
-  const label = useAppStore.getState().redo()
-  if (!label) return
-  useToastStore.getState().showToast({
-    message: `Redid: ${label}`,
-    variant: 'info',
-    action: { label: 'Undo', onClick: undoWithToast },
-  })
-}
 
 function isTypingTarget(target: EventTarget | null): boolean {
   return (
@@ -117,6 +98,7 @@ export default function App() {
           {view === 'board' && <BoardView />}
           {view === 'requests' && <RequestsView />}
           {view === 'inbox' && <InboxView key={currentUserId} />}
+          {view === 'archive' && <ArchiveView />}
           {view === 'settings' && <SettingsView />}
         </div>
       </main>

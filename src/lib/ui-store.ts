@@ -3,8 +3,8 @@ import type { ColumnId } from '../domain/types'
 import { normalizeLabels } from './filters'
 import type { BoardFilters } from './filters'
 
-export type View = 'board' | 'requests' | 'inbox' | 'settings'
-export const VIEWS: View[] = ['board', 'requests', 'inbox', 'settings']
+export type View = 'board' | 'requests' | 'inbox' | 'archive' | 'settings'
+export const VIEWS: View[] = ['board', 'requests', 'inbox', 'archive', 'settings']
 
 export type CardDrawerState = { mode: 'closed' } | { mode: 'edit'; id: string } | { mode: 'new'; column: ColumnId }
 

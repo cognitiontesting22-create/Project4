@@ -16,6 +16,8 @@ import { Ban, ChevronDown, Download, Plus, Search, Tag, TriangleAlert, Upload, X
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { COLUMNS, type Card, type ColumnId, type Member } from '../domain/types'
 import { parseBoardFile, serializeBoard, type ParsedBoard } from '../domain/boardFile'
+import { formatDays, timeInColumnDays } from '../domain/history'
+import { isStale, medianCycleTimeDays, shippedInWindow } from '../domain/metrics'
 import { wipBlockReason } from '../domain/wip'
 import { dependencyBlockReason, isDependencyBlocked, openBlockers } from '../domain/dependencies'
 import { Avatar } from '../components/Avatar'
@@ -23,6 +25,7 @@ import { CardView, SortableCard } from '../components/CardItem'
 import { btnPrimary, COLUMN_ACCENT, TYPE_META } from '../lib/meta'
 import { filterCards, normalizeLabels, type BoardFilters } from '../lib/filters'
 import { keyboardMoveTarget, type MoveDir } from '../lib/keyboard'
+import { useNow } from '../lib/useNow'
 import { useUiStore } from '../lib/ui-store'
 import { useToastStore } from '../lib/toast'
 import { useAppStore } from '../store/useAppStore'
@@ -78,6 +81,7 @@ export function BoardView() {
   const openCard = useUiStore((state) => state.openCard)
   const newCard = useUiStore((state) => state.newCard)
   const showToast = useToastStore((state) => state.showToast)
+  const now = useNow()
 
   const [dragOrder, setDragOrder] = useState<Order | null>(null)
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -89,13 +93,16 @@ export function BoardView() {
   const [importDialog, setImportDialog] = useState<BoardImportDialogState | null>(null)
 
   const byId = useMemo(() => new Map(cards.map((card) => [card.id, card])), [cards])
+  const activeCards = useMemo(() => cards.filter((card) => !card.archivedAt), [cards])
+  const shipped = useMemo(() => shippedInWindow(cards, now), [cards, now])
+  const median = medianCycleTimeDays(shipped)
   const memberById = useMemo(
     () => new Map(members.map((member) => [member.id, member])),
     [members],
   )
   const customers = useMemo(
-    () => [...new Set(cards.map((card) => card.customer).filter(Boolean))].sort(),
-    [cards],
+    () => [...new Set(activeCards.map((card) => card.customer).filter(Boolean))].sort(),
+    [activeCards],
   )
   const filteredCards = useMemo(() => filterCards(cards, filters), [cards, filters])
   const filteredIds = useMemo(
@@ -388,9 +395,15 @@ export function BoardView() {
       <header className="border-b border-slate-200 bg-white px-8 pb-4 pt-6">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-xl font-semibold tracking-tight text-slate-900">Engineering board</h1>
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <h1 className="text-xl font-semibold tracking-tight text-slate-900">Engineering board</h1>
+              <span className="text-sm text-slate-500">{shipped.length} shipped in the last 7 days</span>
+              <span className="text-sm text-slate-500">
+                Median cycle time {median === null ? 'n/a' : formatDays(median)}
+              </span>
+            </div>
             <p className="mt-1 text-sm text-slate-500">
-              {cards.length} cards · <span className="text-orange-600">{escalations} open escalations</span> ·{' '}
+              {activeCards.length} cards · <span className="text-orange-600">{escalations} open escalations</span> ·{' '}
               <span className="text-rose-600">{blockedCount} blocked</span>
             </p>
           </div>
@@ -451,12 +464,12 @@ export function BoardView() {
           setFilters={setFilters}
           members={members}
           customers={customers}
-          cards={cards}
+          cards={activeCards}
           searchRef={searchRef}
         />
         {filtered && (
           <p className="mt-3 flex items-center gap-2 text-xs text-slate-500">
-            Showing {totalVisible} of {cards.length} cards ·{' '}
+            Showing {totalVisible} of {activeCards.length} cards ·{' '}
             <button className="font-medium text-indigo-600 hover:underline" onClick={clearFilters}>
               Clear filters
             </button>
@@ -501,6 +514,11 @@ export function BoardView() {
                         card={card}
                         query={filters.query}
                         blockers={openBlockers(cards, card.blockedBy)}
+                        staleDays={
+                          isStale(card, now, settings.staleAfterDays)
+                            ? timeInColumnDays(card, now)
+                            : null
+                        }
                         assignee={memberById.get(card.assigneeId ?? '')}
                         onOpen={() => openCard(id)}
                         onLabelFilter={toggleLabelFilter}
@@ -527,6 +545,11 @@ export function BoardView() {
               card={activeCard}
               query={filters.query}
               blockers={openBlockers(cards, activeCard.blockedBy)}
+              staleDays={
+                isStale(activeCard, now, settings.staleAfterDays)
+                  ? timeInColumnDays(activeCard, now)
+                  : null
+              }
               assignee={memberById.get(activeCard.assigneeId ?? '')}
               overlay
             />
